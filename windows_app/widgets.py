@@ -963,8 +963,13 @@ class MediaPreviewWidget(QFrame):
         self.replay_or_open_btn.clicked.connect(self._on_replay_or_external_open)
         bot.addWidget(self.replay_or_open_btn)
 
-        reveal_en = "Show in Finder" if sys.platform == "darwin" else "Show in Explorer"
-        self.reveal_btn = QPushButton(tr("在资源管理器中显示", reveal_en))
+        if sys.platform == "darwin":
+            reveal_zh, reveal_en = "在 Finder 中显示", "Show in Finder"
+        elif sys.platform == "win32":
+            reveal_zh, reveal_en = "在资源管理器中显示", "Show in Explorer"
+        else:
+            reveal_zh, reveal_en = "在文件管理器中显示", "Show in File Manager"
+        self.reveal_btn = QPushButton(tr(reveal_zh, reveal_en))
         self.reveal_btn.setEnabled(False)
         self.reveal_btn.clicked.connect(self._on_reveal)
         bot.addWidget(self.reveal_btn)

@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | **English**
 
-**EasyColab** is a native desktop Multimodal AI Studio built for **macOS and Windows**, powered by Google Colab high-VRAM cloud GPUs (macOS native SwiftUI client + Windows PySide6/Qt6 desktop client + cloud multi-model acceleration engine).
+**EasyColab** is a native desktop Multimodal AI Studio built for **macOS, Windows, and Linux**, powered by Google Colab high-VRAM cloud GPUs (macOS native SwiftUI client + Windows / Linux PySide6/Qt6 desktop client + cloud multi-model acceleration engine).
 
 Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` · `96 GB` VRAM + `176 GB` System RAM)** as well as `H100 / A100 / L4` runtimes, EasyColab supports headless one-click runtime wake & deployment, persistent model caching on Google Drive, multi-model VRAM co-residency, real-time spline telemetry charts, instant Chinese/English UI switching, and automatic idle runtime release to save Compute Units.
 
@@ -12,8 +12,8 @@ Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` 
 
 ## Key Features
 
-- **Cross-Platform Native Studio + Bilingual UI Toggle + Interactive Onboarding (1:1 Parity Across macOS & Windows)**
-  - **macOS Client** is crafted natively with SwiftUI + AppKit; **Windows Client** is built with PySide6 (Qt6 + FFmpeg multimedia pipeline) featuring Windows 11 immersive light/dark title bars and high-DPI scaling. Both include a **4-step interactive onboarding wizard** on first launch with zero-config bridge initialization.
+- **Cross-Platform Native Studio + Bilingual UI Toggle + Interactive Onboarding (1:1 Parity Across macOS, Windows & Linux)**
+  - **macOS Client** is crafted natively with SwiftUI + AppKit; **Windows & Linux Clients** are built with PySide6 (Qt6 + FFmpeg multimedia pipeline) featuring high-DPI scaling. All include a **4-step interactive onboarding wizard** on first launch with zero-config bridge initialization.
   - Built-in **one-click Chinese / English (`中文 / EN`) live UI toggle** (defaults to Chinese), persisting language preferences automatically without restarting the app.
   - Real-time smooth Catmull-Rom spline telemetry charts for cloud **GPU VRAM / System RAM / Disk Space** (supporting both split and combined overlay modes), paired with official **Compute Unit (CU) balance** and hourly burn-rate tracking.
   - Built-in **30-minute idle auto-sleep watchdog** and one-click **"Release All Instances"** to prevent forgotten runtimes from draining your CU quota.
@@ -29,7 +29,7 @@ Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` 
      - Supports up to `256K` context length, deep chain-of-thought reasoning, and multimodal image analysis / prompt reverse-engineering.
      - Built-in public API gateway compatible with both **OpenAI (`/v1/chat/completions`)** and **Anthropic (`/v1/messages`)** (with Bearer / `x-api-key` authentication), ready to plug directly into **Claude Code**, **Cursor**, and custom agent workflows.
   4. **`Qwen-Image-2.1` & `Z-Image-Turbo` · 2K Poster Generation & Multi-Image Instruction Editing**
-     - High-fidelity bilingual typography rendering, natural-language multi-image editing, and 8-step ultra-fast photorealistic generation. All generated MP4 videos and PNG images are automatically pulled back to your local machine (macOS: `~/Movies/EasyColab`, Windows: `%USERPROFILE%\Videos\EasyColab`).
+     - High-fidelity bilingual typography rendering, natural-language multi-image editing, and 8-step ultra-fast photorealistic generation. All generated MP4 videos and PNG images are automatically pulled back to your local machine (macOS: `~/Movies/EasyColab`, Windows: `%USERPROFILE%\Videos\EasyColab`, Linux: `~/Videos/EasyColab`).
 
 ---
 
@@ -39,6 +39,7 @@ Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` 
 - **Operating System**:
   - **macOS**: macOS 13.0 (Ventura) or later (Apple Silicon / macOS Sonoma & Sequoia recommended)
   - **Windows**: Windows 10 (1903+) or Windows 11 64-bit (x64)
+  - **Linux**: Modern 64-bit desktop distributions (Ubuntu 22.04+ / Debian 12+ / Arch Linux / Fedora, with Python 3.10+ and FFmpeg)
 - **Cloud Account**: A Google account subscribed to **Google Colab Pro / Pro+ / Google AI Ultra** with available Compute Units (CU). Free-tier users should follow the *"Run via Official Google Colab Web UI"* section below.
 
 ---
@@ -87,15 +88,30 @@ Or in PowerShell:
 powershell -ExecutionPolicy Bypass -File .\windows_app\build_windows_app.ps1
 ```
 
-#### Option 3: Run Directly from Source (Windows / macOS Cross-Platform Preview)
+#### Option 3: Run Directly from Source (Windows / Linux / macOS Cross-Platform Preview)
 
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS:   source .venv/bin/activate
+# Windows:       .venv\Scripts\activate
+# Linux / macOS: source .venv/bin/activate
 pip install -r windows_app/requirements-windows.txt
 python windows_app/easycolab_win.py
 ```
+
+---
+
+### Linux Client
+
+Run `run_linux.sh` from the repository root (automatically creates an isolated `.venv` and installs PySide6 and bridge dependencies on first launch):
+
+```bash
+git clone https://github.com/<your-username>/EasyColab.git
+cd EasyColab
+./run_linux.sh
+```
+
+- Local settings are saved at `~/.config/EasyColab/settings.json`, and generated media is saved to `~/Videos/EasyColab` (respecting `XDG_VIDEOS_DIR` when set).
+- Automatically detects `HTTP_PROXY` / `HTTPS_PROXY` environment variables as well as GNOME system proxy settings (`gsettings`).
 
 ---
 
@@ -112,7 +128,7 @@ python windows_app/easycolab_win.py
 2. **Keep API Key Authentication Enabled**: When exposing the Qwen API Gateway to external tools, keep **Enable API Key Auth** turned on.
 3. **Local Credentials & Data Locations**:
    - Google OAuth tokens are stored strictly on your local machine at `~/.config/colab-cli/token.json` (`%USERPROFILE%\.config\colab-cli\token.json` on Windows) and are never uploaded to any third-party server.
-   - Windows client settings are stored at `%LOCALAPPDATA%\EasyColab\settings.json`, and generated media is saved by default to `%USERPROFILE%\Videos\EasyColab` (`~/Movies/EasyColab` on macOS).
+   - Windows client settings are stored at `%LOCALAPPDATA%\EasyColab\settings.json` (`~/.config/EasyColab/settings.json` on Linux), and generated media is saved by default to `%USERPROFILE%\Videos\EasyColab` (`~/Videos/EasyColab` on Linux, `~/Movies/EasyColab` on macOS).
 
 ---
 

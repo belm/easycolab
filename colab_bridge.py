@@ -42,9 +42,9 @@ _ensure_utf8_stdio()
 
 def _sync_macos_system_proxies_to_env():
     """
-    macOS 原生 GUI 应用启动子进程时默认不包含终端的 HTTP_PROXY / HTTPS_PROXY 环境变量，
+    macOS / Linux 原生 GUI 应用启动子进程时默认可能不包含终端的 HTTP_PROXY / HTTPS_PROXY 环境变量，
     而 websocket-client (Jupyter 内核 WebSocket 通道) 仅从 os.environ 读取代理配置。
-    此处自动读取 macOS / Windows 系统级代理 (scutil --proxy / Internet Settings / urllib.request.getproxies) 并注入环境变量。
+    此处自动读取 macOS / Windows / Linux 系统级代理 (scutil --proxy / Internet Settings / gsettings / urllib.request.getproxies) 并注入环境变量。
     """
     try:
         proxies = urllib.request.getproxies()
@@ -52,6 +52,26 @@ def _sync_macos_system_proxies_to_env():
             if k in proxies and proxies[k]:
                 os.environ.setdefault(f"{k}_proxy", proxies[k])
                 os.environ.setdefault(f"{k.upper()}_PROXY", proxies[k])
+        if sys.platform.startswith("linux") and not (os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")):
+            import subprocess
+            mode = subprocess.run(
+                ["gsettings", "get", "org.gnome.system.proxy", "mode"],
+                capture_output=True, text=True, timeout=2
+            ).stdout.strip().strip("'")
+            if mode == "manual":
+                for k in ("http", "https"):
+                    host = subprocess.run(
+                        ["gsettings", "get", f"org.gnome.system.proxy.{k}", "host"],
+                        capture_output=True, text=True, timeout=2
+                    ).stdout.strip().strip("'")
+                    port = subprocess.run(
+                        ["gsettings", "get", f"org.gnome.system.proxy.{k}", "port"],
+                        capture_output=True, text=True, timeout=2
+                    ).stdout.strip()
+                    if host and port and port.isdigit() and int(port) > 0:
+                        proxy_url = f"http://{host}:{port}"
+                        os.environ.setdefault(f"{k}_proxy", proxy_url)
+                        os.environ.setdefault(f"{k.upper()}_PROXY", proxy_url)
     except Exception:
         pass
 
