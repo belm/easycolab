@@ -257,8 +257,9 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
             "就绪：请先绑定 Google 账号并唤醒 G4 实例，或粘贴已有隧道链接连接。",
             "Ready: Bind your Google account and wake a G4 runtime, or paste an existing tunnel URL.",
         )
+        _plat_label = "Windows" if sys.platform == "win32" else ("macOS" if sys.platform == "darwin" else "Linux")
         self.live_console_lines: List[str] = [
-            tr("EasyColab Windows 工作台已就绪。", "EasyColab Windows Studio is ready."),
+            tr(f"EasyColab {_plat_label} 工作台已就绪。", f"EasyColab {_plat_label} Studio is ready."),
             tr(
                 f"本地成片自动保存目录: {get_local_save_dir()}",
                 f"Local media auto-save folder: {get_local_save_dir()}",
@@ -391,7 +392,9 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
         )
 
         save_dir = get_local_save_dir()
+        _plat_label = "Windows" if sys.platform == "win32" else ("macOS" if sys.platform == "darwin" else "Linux")
         line_pairs = [
+            (f"EasyColab {_plat_label} 工作台已就绪。", f"EasyColab {_plat_label} Studio is ready."),
             ("EasyColab Windows 工作台已就绪。", "EasyColab Windows Studio is ready."),
             (f"本地成片自动保存目录: {save_dir}", f"Local media auto-save folder: {save_dir}"),
             ("已清空历史输出，正在监听云端实时日志...", "Console cleared. Listening for live cloud logs..."),

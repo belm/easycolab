@@ -2,7 +2,7 @@
 
 **简体中文** | [English](./README_EN.md)
 
-**EasyColab** 是一款专为 **macOS、Windows、iOS / iPadOS 与 Android** 原生打造的 Google Colab 云端大显存多模态 AI 创作工作台（macOS SwiftUI 原生客户端 + Windows PySide6/Qt6 桌面客户端 + iOS/iPadOS 纯 SwiftUI 原生客户端 + Android 纯 Kotlin Jetpack Compose 原生客户端 + 云端多模型加速引擎）。
+**EasyColab** 是一款专为 **macOS、Windows、Linux、iOS / iPadOS 与 Android** 原生打造的 Google Colab 云端大显存多模态 AI 创作工作台（macOS SwiftUI 原生客户端 + Windows / Linux PySide6/Qt6 桌面客户端 + iOS/iPadOS 纯 SwiftUI 原生客户端 + Android 纯 Kotlin Jetpack Compose 原生客户端 + 云端多模型加速引擎）。
 
 默认适配 **Google Colab G4（NVIDIA RTX PRO 6000 Blackwell · `96 GB` 显存 + `176 GB` 系统内存）** 以及 `H100 / A100 / L4` 实例，支持免开网页一键唤醒部署、Google Drive 云盘权重永久复用、多模型显存共驻、实时算力折线图监控、中英文双语界面一键切换与闲置自动释放省额度。
 
@@ -20,8 +20,8 @@ Drive 无浏览器挂载仍可能将带有 Colab 和 Cloud Platform 授权的 Go
 
 ## 核心特性
 
-- **双平台桌面级创作体验 + 中英文双语切换 + 新手交互引导（macOS & Windows 1:1 全功能对齐）**
-  - **macOS 端**采用纯原生 SwiftUI + AppKit 构建，**Windows 端**采用 PySide6 (Qt6 + FFmpeg 多媒体管线) 构建并适配 Windows 11 沉浸式深浅色标题栏与高分屏缩放；首次启动均自带 **4 步交互式新手引导**，零配置自动初始化连接组件。
+- **全平台桌面级创作体验 + 中英文双语切换 + 新手交互引导（macOS / Windows / Linux 1:1 全功能对齐）**
+  - **macOS 端**采用纯原生 SwiftUI + AppKit 构建，**Windows 与 Linux 端**采用 PySide6 (Qt6 + FFmpeg 多媒体管线) 构建并适配高分屏缩放；首次启动均自带 **4 步交互式新手引导**，零配置自动初始化连接组件。
   - 支持 **中英文（简体中文 / English）界面实时一键切换**（默认显示中文），状态与偏好自动记忆，无需重启应用。
   - 实时绘制云端 **GPU 显存 / 系统内存 / 磁盘空间** 平滑曲线走势图（支持分项与同屏叠加模式），同步显示官方真实剩余 **CU 计算单元** 与每小时消耗速率。
   - 内置 **30 分钟闲置自动休眠看门狗** 与一键「断开并释放实例」，杜绝忘记关机空耗算力额度。
@@ -37,7 +37,7 @@ Drive 无浏览器挂载仍可能将带有 Colab 和 Cloud Platform 授权的 Go
      - 支持最高 `256K` 上下文、长思维链推理、多模态看图反推提示词。
      - 内置兼容 **OpenAI (`/v1/chat/completions`)** 与 **Anthropic (`/v1/messages`)** 的公网 API 网关（支持 Bearer / `x-api-key` 鉴权），可直接接入 **Claude Code**、**Cursor** 等开发工具。
   4. **`Qwen-Image-2.1` & `Z-Image-Turbo` · 2K 海报生图与多图指令修图**
-     - 支持高质感中英文排版直出、双图自然语言指令修图与 8 步极速出图；所有生成的 MP4 / PNG 自动回传至本地目录（macOS: `~/Movies/EasyColab`，Windows: `%USERPROFILE%\Videos\EasyColab`）。
+     - 支持高质感中英文排版直出、双图自然语言指令修图与 8 步极速出图；所有生成的 MP4 / PNG 自动回传至本地目录（macOS: `~/Movies/EasyColab`，Windows: `%USERPROFILE%\Videos\EasyColab`，Linux: `~/Videos/EasyColab`）。
 
 ---
 
@@ -47,6 +47,7 @@ Drive 无浏览器挂载仍可能将带有 Colab 和 Cloud Platform 授权的 Go
 - **操作系统**：
   - **macOS**：macOS 13.0 (Ventura) 或更高版本（推荐 Apple Silicon / macOS Sonoma & Sequoia）
   - **Windows**：Windows 10 (1903+) 或 Windows 11 64 位 (x64)
+  - **Linux**：主流 64 位桌面发行版（Ubuntu 22.04+ / Debian 12+ / Arch Linux / Fedora 等，需 Python 3.10+ 与 FFmpeg）
   - **iOS / iPadOS**：iOS 16.0 或更高版本（支持 Mac 本地源码真机签名安装或通过 AltStore / SideStore / Sideloadly / TrollStore 侧载 `.ipa`）
   - **Android**：Android 8.0 (API 26) 或更高版本（支持从 GitHub Releases 下载签名 `.apk` 直接安装，或从 `android_app/` 源码一键编译）
 - **云端账号**：开通了 **Google Colab Pro / Pro+ / Google AI Ultra**（拥有可用 CU 计算单元）的 Google 账号；免费版用户请使用下方「Google Colab 官方网页端运行 `.ipynb`」。
@@ -59,8 +60,8 @@ Drive 无浏览器挂载仍可能将带有 Colab 和 Cloud Platform 授权的 Go
 只需系统装有 Xcode Command Line Tools（若未安装可执行 `xcode-select --install`）：
 
 ```bash
-git clone https://github.com/<your-username>/EasyColab.git
-cd EasyColab
+git clone https://github.com/wy51ai/easycolab.git
+cd easycolab
 bash macos_app/build_macos_app.sh
 open EasyColab.app
 ```
@@ -104,15 +105,30 @@ powershell -ExecutionPolicy Bypass -File .\windows_app\build_windows_app.ps1
 python3 windows_app/build_windows_from_mac.py
 ```
 
-#### 方式四：源码开发模式直接运行（Windows / macOS 通用预览）
+#### 方式四：源码开发模式直接运行（Windows / Linux / macOS 通用预览）
 
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS:   source .venv/bin/activate
+# Windows:       .venv\Scripts\activate
+# Linux / macOS: source .venv/bin/activate
 pip install -r windows_app/requirements-windows.txt
 python windows_app/easycolab_win.py
 ```
+
+---
+
+### Linux 客户端
+
+只需一键执行仓库根目录下的 `run_linux.sh`（首次运行会自动创建 `.venv` 隔离环境并安装 PySide6 与 Colab 桥接依赖）：
+
+```bash
+git clone https://github.com/wy51ai/easycolab.git
+cd easycolab
+./run_linux.sh
+```
+
+- 本地配置自动保存在 `~/.config/EasyColab/settings.json`，生成的视频与图片默认保存在 `~/Videos/EasyColab`（优先遵循 `XDG_VIDEOS_DIR`）。
+- 支持自动读取环境变量代理（`HTTP_PROXY` / `HTTPS_PROXY`）以及 GNOME 系统网络代理（`gsettings`）。
 
 ---
 
@@ -183,7 +199,7 @@ bash android_app/install_release_android.sh
 2. **推理密钥**：外部工具通过 Bearer 或 `x-api-key` 提交 API 网关面板中的推理密钥。
 3. **本地凭证与数据目录**：
    - 桥接程序读取本机 `~/.config/colab-cli/token.json`。无浏览器挂载 Drive 时，刷新令牌也会写入云端实例的 rclone 配置。
-   - Windows 客户端本地配置文件位于 `%LOCALAPPDATA%\EasyColab\settings.json`，成片默认保存于 `%USERPROFILE%\Videos\EasyColab`。
+   - Windows 客户端本地配置文件位于 `%LOCALAPPDATA%\EasyColab\settings.json`（Linux 为 `~/.config/EasyColab/settings.json`），成片默认保存于 `%USERPROFILE%\Videos\EasyColab`（Linux 为 `~/Videos/EasyColab`）。
 
 ---
 

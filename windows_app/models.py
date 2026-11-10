@@ -1294,15 +1294,18 @@ def get_app_config_dir() -> Path:
 
 
 def get_local_save_dir() -> Path:
-    """Default local media output directory: %USERPROFILE%\\Videos\\EasyColab on Windows, ~/Movies/EasyColab on Mac."""
-    if sys.platform == "win32":
-        videos_root = Path.home() / "Videos"
-        if not videos_root.exists():
-            # Fallback if Windows Videos folder was redirected or missing
-            videos_root = Path(os.path.expanduser("~")) / "Videos"
-        save_dir = videos_root / "EasyColab"
-    else:
+    """Default local media output directory: ~/Videos/EasyColab on Windows/Linux, ~/Movies/EasyColab on Mac."""
+    if sys.platform == "darwin":
         save_dir = Path.home() / "Movies" / "EasyColab"
+    else:
+        xdg_videos = os.environ.get("XDG_VIDEOS_DIR", "").strip()
+        if xdg_videos and Path(xdg_videos).is_dir():
+            videos_root = Path(xdg_videos)
+        else:
+            videos_root = Path.home() / "Videos"
+            if not videos_root.exists():
+                videos_root = Path(os.path.expanduser("~")) / "Videos"
+        save_dir = videos_root / "EasyColab"
     save_dir.mkdir(parents=True, exist_ok=True)
     return save_dir
 
@@ -1318,7 +1321,7 @@ def get_legacy_media_dirs() -> List[Path]:
 
 
 def open_path_in_os(path: Path, reveal: bool = False) -> None:
-    """Open file/folder in Explorer (Windows) or Finder (macOS)."""
+    """Open file/folder in Explorer (Windows), Finder (macOS), or File Manager (Linux)."""
     import subprocess
 
     target = Path(path).resolve()

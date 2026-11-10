@@ -201,8 +201,8 @@ def metric_threshold_color(metric: str, free_gb: float, default_hex: str) -> str
 
 
 def build_stylesheet(pal: StudioPalette) -> str:
-    """Build crisp Windows 11 / Studio QSS stylesheet (Light-first, zero emoji)."""
-    font_family = '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif'
+    """Build crisp Windows 11 / Linux Studio QSS stylesheet (Light-first, zero emoji)."""
+    font_family = '"Segoe UI Variable Text", "Segoe UI", "Noto Sans CJK SC", "Source Han Sans SC", "Cantarell", "Ubuntu", "Microsoft YaHei UI", "PingFang SC", sans-serif'
     btn_bg = "#303540" if pal.is_dark else "#FFFFFF"
     btn_hover_bg = "#3A404D" if pal.is_dark else "#F1F5F9"
     danger_bg = "rgba(239, 68, 68, 0.14)" if pal.is_dark else "rgba(239, 68, 68, 0.08)"
