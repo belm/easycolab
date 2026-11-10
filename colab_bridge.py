@@ -17,6 +17,7 @@ import json
 import time
 import uuid
 import argparse
+import tempfile
 import urllib.request
 from importlib import resources
 
@@ -302,7 +303,7 @@ def cmd_stop_all():
                         "import urllib.request\n"
                         "try:\n"
                         "    urllib.request.urlopen(urllib.request.Request("
-                        "'http://127.0.0.1:7860/minimax_api/comfyui/sync_drive', "
+                        "'http://127.0.0.1:27860/minimax_api/comfyui/sync_drive', "
                         "data=b'{}', headers={'Content-Type':'application/json'}, method='POST'), timeout=18)\n"
                         "except Exception:\n"
                         "    pass\n",
@@ -442,6 +443,14 @@ def cmd_wake(gpu_type: str, app_py_path: str):
         print("WAKE_ERROR: 尚未授权登录 Google 账号，请先点击「🔑 绑定账号」", flush=True)
         return
 
+    import getpass
+    password = os.environ.pop("EASYCOLAB_ADMIN_PASSWORD", "")
+    if not password and sys.stdin.isatty():
+        password = getpass.getpass("Management password (24+ URL-safe characters): ")
+    if not password:
+        print("WAKE_ERROR: Set a management password before deploying", flush=True)
+        return
+
     try:
         session_name = "easycolab"
         print("WAKE_LOG: 🔍 正在检查账号下已有的 Colab 实例...", flush=True)
@@ -514,9 +523,9 @@ def cmd_wake(gpu_type: str, app_py_path: str):
                     raise up_err
                 time.sleep(2.5)
 
+        contents.upload(os.path.join(os.path.dirname(app_py_path), "runtime_auth.py"), "content/runtime_auth.py")
         rclone_conf_text = _build_rclone_drive_conf()
         if rclone_conf_text:
-            import tempfile
             tmp_rc_fd, tmp_rc_path = tempfile.mkstemp(prefix="easycolab_rc_", suffix=".conf")
             try:
                 with os.fdopen(tmp_rc_fd, "w", encoding="utf-8") as rcf:
@@ -535,6 +544,16 @@ def cmd_wake(gpu_type: str, app_py_path: str):
         print("WAKE_LOG: 正在云端配置 Google Drive 持久化、多模型引擎并启动隧道 (约需 40~90 秒)...", flush=True)
         boot_code = r"""
 import os, sys, time, re, shutil, subprocess
+
+with open(ADMIN_STAGE, encoding="ascii") as stream:
+    admin_password = stream.read()
+os.unlink(ADMIN_STAGE)
+
+if not shutil.which("nginx"):
+    subprocess.run(["apt-get", "update", "-qq"], check=True)
+    subprocess.run(["apt-get", "install", "-y", "-qq", "nginx-light"], check=True)
+    # apt may start the distribution's default site.
+    subprocess.run(["service", "nginx", "stop"], check=False)
 
 # 0. 配置无网页模式下的 Google Drive 云盘自动挂载/高速同步 (供模型库与 ComfyUI 节点持久化)
 rc_stage = "/content/.easycolab_rclone.conf"
@@ -608,9 +627,9 @@ if os.path.exists(log_path):
     os.remove(log_path)
 
 with open(log_path, "w") as out_f:
-    subprocess.Popen([sys.executable, "-u", "/content/app.py"], cwd="/content", stdout=out_f, stderr=subprocess.STDOUT)
+    subprocess.Popen([sys.executable, "-u", "/content/app.py"], cwd="/content", env={**os.environ, "EASYCOLAB_ADMIN_PASSWORD": admin_password}, stdout=out_f, stderr=subprocess.STDOUT)
 
-url_re = re.compile(r"https://[a-zA-Z0-9.-]+\.gradio\.live")
+url_re = re.compile(r"^EasyColab URL: (https://[a-zA-Z0-9-]+\.gradio\.live)$", re.MULTILINE)
 found_url = None
 for _ in range(90):
     time.sleep(2)
@@ -618,7 +637,7 @@ for _ in range(90):
         txt = open(log_path, "r", errors="replace").read()
         m = url_re.search(txt)
         if m:
-            found_url = m.group(0)
+            found_url = m.group(1)
             break
 
 if found_url:
@@ -627,6 +646,7 @@ else:
     tail = open(log_path, "r", errors="replace").read()[-600:] if os.path.exists(log_path) else "no log"
     print("WAKE_ERROR: 启动超时，日志尾部: " + tail, flush=True)
 """
+
         def _on_kid(kid):
             target_session.kernel_id = kid
             state.store.add(target_session)
@@ -647,7 +667,16 @@ else:
                 on_session_started=_on_sid,
             )
             try:
-                return rt.execute_code(boot_code, allow_stdin=False, timeout=300)
+                # Each retry gets its own single-use file. The password never
+                # enters the execute_request source or the streamed wake log.
+                stage = ".easycolab-management-" + uuid.uuid4().hex
+                with tempfile.TemporaryDirectory() as directory:
+                    password_file = os.path.join(directory, "management")
+                    with open(password_file, "w", encoding="ascii") as stream:
+                        stream.write(password)
+                    contents.upload(password_file, "content/" + stage)
+                code = "ADMIN_STAGE = " + repr("/content/" + stage) + "\n" + boot_code
+                return rt.execute_code(code, allow_stdin=False, timeout=300)
             finally:
                 try:
                     rt.stop()

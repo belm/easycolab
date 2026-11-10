@@ -349,7 +349,7 @@ def copy_app_sources_and_resources() -> None:
     step("5/6 Copying EasyColab application modules, icons & Colab server resources...")
     # Entry script & core resources in _internal/
     shutil.copy2(WIN_APP_DIR / "easycolab_win.py", INTERNAL_DIR / "easycolab_win.py")
-    for res_name in ("VERSION", "app.py", "colab_bridge.py", "EasyColab_Server.ipynb"):
+    for res_name in ("VERSION", "app.py", "runtime_auth.py", "colab_bridge.py", "EasyColab_Server.ipynb"):
         res_src = REPO_ROOT / res_name
         if res_src.is_file():
             shutil.copy2(res_src, INTERNAL_DIR / res_name)

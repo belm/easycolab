@@ -372,6 +372,7 @@ class ViewModelServicesMixin:
             self.state_changed.emit()
             return
 
+        password = secrets.token_urlsafe(32)
         gpu = self.wake_gpu_choice
         self.is_waking_colab = True
         self.status_message = tr(
@@ -403,7 +404,7 @@ class ViewModelServicesMixin:
                     encoding="utf-8",
                     errors="replace",
                     bufsize=1,
-                    env=self._bridge_env(),
+                    env={**self._bridge_env(), "EASYCOLAB_ADMIN_PASSWORD": password},
                     creationflags=WIN_NO_WINDOW,
                 )
                 assert proc.stdout is not None
@@ -416,6 +417,7 @@ class ViewModelServicesMixin:
 
                         def on_url(u: str = url) -> None:
                             self.set_colab_server_url(u)
+                            self.set_admin_password(password)
                             self.append_console_line(
                                 tr(
                                     f"成功获取云端隧道地址: {self.masked_url(u)}",
@@ -514,7 +516,7 @@ class ViewModelServicesMixin:
         def worker() -> None:
             if base:
                 try:
-                    requests.post(f"{base}/minimax_api/disconnect", json={}, timeout=8)
+                    self._admin_request("POST", f"{base}/minimax_api/disconnect", json={}, timeout=8)
                 except Exception:
                     pass
             try:
@@ -717,7 +719,8 @@ class ViewModelServicesMixin:
             results: list = []
             if self.is_connected and base:
                 try:
-                    r = requests.get(
+                    r = self._admin_request(
+                        "GET",
                         f"{base}/minimax_api/hf_trending",
                         params={
                             "category": cat,
@@ -852,7 +855,8 @@ class ViewModelServicesMixin:
         def worker() -> None:
             if self.is_connected and base:
                 try:
-                    r = requests.get(
+                    r = self._admin_request(
+                        "GET",
                         f"{base}/minimax_api/hf_model_detail",
                         params={"repo_id": clean_id, "hf_token": tok},
                         timeout=14,
@@ -1069,7 +1073,8 @@ class ViewModelServicesMixin:
 
             def worker() -> None:
                 try:
-                    r = requests.post(
+                    r = self._admin_request(
+                        "POST",
                         f"{base}/minimax_api/custom_model/register",
                         json={
                             "repo_id": clean_repo,
@@ -1181,7 +1186,8 @@ class ViewModelServicesMixin:
 
             def worker() -> None:
                 try:
-                    r = requests.post(
+                    r = self._admin_request(
+                        "POST",
                         f"{base}/minimax_api/custom_model/remove",
                         json={"model_id": model_id, "delete_weights": False},
                         timeout=20,
@@ -1208,7 +1214,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(
+                r = self._admin_request("POST",
                     f"{base}/minimax_api/config_idle",
                     json={"idle_timeout_minutes": minutes},
                     timeout=20,
@@ -1221,12 +1227,6 @@ class ViewModelServicesMixin:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def set_api_key_enabled(self, enabled: bool) -> None:
-        self.api_key_enabled = bool(enabled)
-        self._save_setting("apiKeyEnabled", self.api_key_enabled)
-        self.state_changed.emit()
-        self.sync_api_key_to_colab()
-
     def regenerate_api_key(self) -> None:
         self.api_access_key = "sk-colab-" + secrets.token_hex(10)
         self._save_setting("apiAccessKey", self.api_access_key)
@@ -1235,20 +1235,22 @@ class ViewModelServicesMixin:
         if self.is_connected:
             self.sync_api_key_to_colab()
 
-    def sync_api_key_to_colab(self, custom_key: Optional[str] = None) -> None:
+    def sync_api_key_to_colab(self, custom_key: Optional[str] = None, initialize_only: bool = False) -> None:
         if custom_key is not None:
+            if not custom_key.strip():
+                return
             self.api_access_key = custom_key.strip()
             self._save_setting("apiAccessKey", self.api_access_key)
         base = self.normalized_base_url
         if not self.is_connected or not base:
             return
-        payload_key = self.api_access_key.strip() if self.api_key_enabled else ""
+        payload_key = self.api_access_key.strip()
 
         def worker() -> None:
             try:
-                r = requests.post(
+                r = self._admin_request("POST",
                     f"{base}/minimax_api/config_api_key",
-                    json={"api_key": payload_key},
+                    json={"api_key": payload_key, "initialize_only": initialize_only},
                     timeout=20,
                 )
                 if r.status_code == 200:
@@ -1267,7 +1269,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(
+                r = self._admin_request("POST",
                     f"{base}/minimax_api/config_context",
                     json={"context_length": ctx_tokens},
                     timeout=20,
@@ -1307,13 +1309,13 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/comfyui/start", json=payload, timeout=30)
+                r = self._admin_request("POST", f"{base}/minimax_api/comfyui/start", json=payload, timeout=30)
                 if r.status_code == 200:
                     data = r.json()
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
                 for _ in range(180):
                     time.sleep(1.5)
-                    sr = requests.get(
+                    sr = self._admin_request("GET",
                         f"{base}/minimax_api/status",
                         params={"model_id": self.selected_model_id},
                         timeout=22,
@@ -1353,7 +1355,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/comfyui/stop", json={}, timeout=35)
+                r = self._admin_request("POST", f"{base}/minimax_api/comfyui/stop", json={}, timeout=35)
                 if r.status_code == 200:
                     data = r.json()
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
@@ -1373,7 +1375,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/comfyui/free_vram", json={}, timeout=20)
+                r = self._admin_request("POST", f"{base}/minimax_api/comfyui/free_vram", json={}, timeout=20)
                 if r.status_code == 200:
                     data = r.json()
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
@@ -1399,7 +1401,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/comfyui/sync_drive", json={}, timeout=90)
+                r = self._admin_request("POST", f"{base}/minimax_api/comfyui/sync_drive", json={}, timeout=90)
                 if r.status_code == 200:
                     data = r.json()
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
@@ -1453,13 +1455,13 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/comfyui/download_weight", json=payload, timeout=25)
+                r = self._admin_request("POST", f"{base}/minimax_api/comfyui/download_weight", json=payload, timeout=25)
                 if r.status_code == 200:
                     data = r.json()
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
                 while True:
                     time.sleep(1.5)
-                    sr = requests.get(
+                    sr = self._admin_request("GET",
                         f"{base}/minimax_api/status",
                         params={"model_id": self.selected_model_id},
                         timeout=22,
@@ -1512,7 +1514,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/comfyui/install_pack", json=payload, timeout=30)
+                r = self._admin_request("POST", f"{base}/minimax_api/comfyui/install_pack", json=payload, timeout=30)
                 if r.status_code == 404:
                     self._dispatch_ui(
                         lambda: self._set_status_and_log(
@@ -1528,7 +1530,7 @@ class ViewModelServicesMixin:
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
                 for _ in range(600):
                     time.sleep(1.5)
-                    sr = requests.get(
+                    sr = self._admin_request("GET",
                         f"{base}/minimax_api/status",
                         params={"model_id": self.selected_model_id},
                         timeout=22,
@@ -1580,7 +1582,7 @@ class ViewModelServicesMixin:
 
         def worker() -> None:
             try:
-                r = requests.get(url, timeout=180)
+                r = self._admin_request("GET", url, timeout=180)
                 if r.status_code == 200 and r.content:
                     dst.write_bytes(r.content)
 

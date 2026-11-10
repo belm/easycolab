@@ -1,4 +1,7 @@
 import os
+
+# Remove the deployment secret before any model installer starts subprocesses.
+_DEPLOY_PASSWORD = os.environ.pop("EASYCOLAB_ADMIN_PASSWORD", "") if __name__ == "__main__" else ""
 import io
 import gc
 import re
@@ -10,6 +13,9 @@ import queue
 import atexit
 import socket
 import base64
+import secrets
+import signal
+from runtime_auth import authenticated_ingress, COMFY_BACKEND, COMFY_INGRESS, GRADIO_BACKEND, GRADIO_INGRESS
 import subprocess
 import threading
 from collections import deque
@@ -1059,7 +1065,6 @@ def _optimize_qwen35_for_fast_inference(mdl, max_context_len: int = 32768):
     except Exception as opt_err:
         print(f"[加速引擎] CUDAGraph 未捕获，融合算子仍保留 ({type(opt_err).__name__}: {opt_err})")
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -1079,7 +1084,9 @@ SELECTED_MODEL_ID = "minimax_h3"
 LOADED_MODEL_ID = None
 CURRENT_MODEL_MODE = None
 QWEN_CONTEXT_LENGTH = 32768  # 用户可自定义上下文长度 (4K ~ 256K = 262144 tokens)
-API_AUTH_KEY = ""
+INITIAL_API_KEY = secrets.token_urlsafe(32)
+API_AUTH_KEY = INITIAL_API_KEY
+API_KEY_LOCK = threading.Lock()
 API_REQUEST_COUNT = 0
 GPU_LOCK = threading.Lock()
 ABORT_GENERATION_EVENT = threading.Event()
@@ -1272,7 +1279,7 @@ COMFYUI_STATE: Dict[str, Any] = {
     "progress": 0.0,
     "status_message": "尚未启动（支持一键拉起 ComfyUI + Google Drive 自动软链持久化）",
     "public_url": "",
-    "local_port": 8188,
+    "local_port": COMFY_BACKEND,
     "queue_running": 0,
     "queue_pending": 0,
     "persistence_mode": "drive_symlink" if DRIVE_MOUNTED else ("rclone_drive_sync" if _has_rclone_drive_remote() else "local_only"),
@@ -2908,7 +2915,8 @@ def get_gpu_status_dict(model_id: Optional[str] = None) -> Dict[str, Any]:
         "session_cu_used": session_cu_used,
         "idle_timeout_minutes": IDLE_TIMEOUT_MINUTES,
         "idle_remaining_seconds": idle_remaining_seconds,
-        "api_key_enabled": bool(API_AUTH_KEY),
+        "api_key_enabled": True,
+        "api_key_configured": API_AUTH_KEY != INITIAL_API_KEY,
         "api_request_count": API_REQUEST_COUNT,
         "console_lines": get_live_console_Lines(),
         "custom_models": _get_custom_models_public_list(),
@@ -5677,7 +5685,7 @@ def _try_adopt_running_comfyui():
         return
     _COMFY_ADOPT_CHECKED = True
 
-    port = int(COMFYUI_STATE.get("local_port") or 8188)
+    port = int(COMFYUI_STATE.get("local_port") or COMFY_BACKEND)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(f"http://127.0.0.1:{port}/system_stats", timeout=1.0) as resp:
@@ -5718,7 +5726,7 @@ def _try_adopt_running_comfyui():
         try:
             cf_bin = _ensure_cloudflared_binary()
             tunnel_proc = subprocess.Popen(
-                [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
+                [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{COMFY_INGRESS}", "--no-autoupdate"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -5774,7 +5782,7 @@ def _poll_local_comfyui_runtime_quiet():
             return
 
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    port = int(COMFYUI_STATE.get("local_port") or 8188)
+    port = int(COMFYUI_STATE.get("local_port") or COMFY_BACKEND)
     try:
         with opener.open(f"http://127.0.0.1:{port}/queue", timeout=1.2) as r:
             q_data = json.loads(r.read().decode("utf-8", errors="replace"))
@@ -5838,7 +5846,7 @@ def get_comfyui_status_dict() -> Dict[str, Any]:
 def free_comfyui_vram_core() -> Tuple[bool, str]:
     if not COMFYUI_STATE.get("is_running"):
         return False, "ComfyUI 当前未运行"
-    port = int(COMFYUI_STATE.get("local_port") or 8188)
+    port = int(COMFYUI_STATE.get("local_port") or COMFY_BACKEND)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         req = urllib.request.Request(
@@ -6089,6 +6097,7 @@ def stop_comfyui_core(sync_before_stop: bool = True) -> Tuple[bool, str]:
 def start_comfyui_core(unload_existing: bool = False, force_restart: bool = False) -> Tuple[bool, str]:
     global _COMFY_BG_SYNC_STARTED
     touch_activity()
+    _try_adopt_running_comfyui()
     if COMFYUI_STATE["is_starting"]:
         return True, "ComfyUI 正在部署启动中，请稍候..."
     if COMFYUI_STATE["is_running"] and COMFYUI_STATE.get("public_url") and not force_restart:
@@ -6232,19 +6241,18 @@ def start_comfyui_core(unload_existing: bool = False, force_restart: bool = Fals
         _install_persisted_custom_node_requirements(comfy_root)
         sync_comfyui_to_drive_core(quiet=True)
 
-        # 5. 启动 ComfyUI 服务进程 (127.0.0.1:8188) 并实时镜像输出至 EasyColab 日志面板
+        # 5. 启动 ComfyUI 服务进程 (loopback) 并实时镜像输出至 EasyColab 日志面板
         COMFYUI_STATE["progress"] = 0.80
-        COMFYUI_STATE["status_message"] = "正在拉起 ComfyUI 节点推理引擎 (端口 8188)..."
+        COMFYUI_STATE["status_message"] = "正在拉起 ComfyUI 节点推理引擎 (本地后端)..."
         subprocess.run(["pkill", "-f", "ComfyUI/main.py"], check=False)
         subprocess.run(["pkill", "-f", "cloudflared.*8188"], check=False)
         time.sleep(0.6)
 
-        port = int(COMFYUI_STATE.get("local_port") or 8188)
+        port = int(COMFYUI_STATE.get("local_port") or COMFY_BACKEND)
         comfy_cmd = [
-            sys.executable, "-u", "main.py",
+            sys.executable, "-u", os.path.join(comfy_root, "main.py"),
             "--listen", "127.0.0.1",
             "--port", str(port),
-            "--enable-cors-header", "*",
             "--preview-method", "auto",
         ]
         comfy_proc = subprocess.Popen(
@@ -6285,14 +6293,14 @@ def start_comfyui_core(unload_existing: bool = False, force_restart: bool = Fals
             time.sleep(1.0)
 
         if not ready:
-            raise RuntimeError("等待 ComfyUI 本地端口 8188 就绪超时，请查看右侧运行日志。")
+            raise RuntimeError("等待 ComfyUI 本地后端端口 就绪超时，请查看右侧运行日志。")
 
         # 6. 启动 Cloudflare WebSocket 高速公网隧道
         COMFYUI_STATE["progress"] = 0.92
         COMFYUI_STATE["status_message"] = "ComfyUI 内核已就绪，正在建立 Cloudflare 高速全屏画布隧道..."
         cf_bin = _ensure_cloudflared_binary()
         tunnel_proc = subprocess.Popen(
-            [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"],
+            [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{COMFY_INGRESS}", "--no-autoupdate"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -6396,11 +6404,11 @@ def download_comfyui_model_core(
             COMFYUI_STATE["status_message"] = f"正在下载 {base_name} 至 models/{clean_sub}..."
             print(f"[ComfyUI 直链下载] {raw_src} -> models/{clean_sub}/{base_name}")
             headers = {"User-Agent": "EasyColab/2.0"}
-            if token and "huggingface.co" in raw_src:
+            if token and urllib.parse.urlsplit(raw_src).scheme == "https" and urllib.parse.urlsplit(raw_src).hostname == "huggingface.co":
                 headers["Authorization"] = f"Bearer {token}"
             req = urllib.request.Request(raw_src, headers=headers)
             tmp_p = final_path + ".part"
-            with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_p, "wb") as wf:
+            with urllib.request.build_opener(_StripAuthRedirectHandler()).open(req, timeout=120) as resp, open(tmp_p, "wb") as wf:
                 total_sz = int(resp.headers.get("Content-Length") or 0)
                 done_sz = 0
                 t0 = time.time()
@@ -6550,7 +6558,7 @@ def install_comfyui_preset_pack_core(
         # 若 ComfyUI 正在运行，主动轻触 /object_info 刷新模型下拉缓存；若尚未启动且开启了 auto_start，直接自动拉起画布
         if COMFYUI_STATE.get("is_running"):
             try:
-                port = int(COMFYUI_STATE.get("local_port") or 8188)
+                port = int(COMFYUI_STATE.get("local_port") or COMFY_BACKEND)
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
                 with opener.open(f"http://127.0.0.1:{port}/object_info/UNETLoader", timeout=3.0) as _:
                     pass
@@ -7423,6 +7431,7 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
 
 class ApiKeyConfigRequest(BaseModel):
     api_key: str = ""
+    initialize_only: bool = False
 
 
 class UnloadModelRequest(BaseModel):
@@ -7451,13 +7460,11 @@ class RemoveCustomModelRequest(BaseModel):
 def _verify_external_api_auth(request: Request, protocol: str = "openai") -> Optional[JSONResponse]:
     """同时支持 Authorization: Bearer <key> 与 x-api-key: <key> 鉴权"""
     expected = (API_AUTH_KEY or "").strip()
-    if not expected:
-        return None
     auth_hdr = (request.headers.get("authorization") or "").strip()
     bearer_tok = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
     x_api_tok = (request.headers.get("x-api-key") or "").strip()
     provided = bearer_tok or x_api_tok
-    if provided == expected:
+    if expected and secrets.compare_digest(provided.encode(), expected.encode()):
         return None
     if protocol == "anthropic":
         return JSONResponse(
@@ -8220,18 +8227,6 @@ def attach_macos_api_routes(app: FastAPI):
     """在 Gradio 底层的 FastAPI 实例上挂载原生 macOS 客户端接口 + OpenAI / Anthropic 双协议 API 网关"""
     global API_AUTH_KEY, API_REQUEST_COUNT
 
-    try:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    except Exception:
-        # Gradio 启动后的 FastAPI 实例默认已内置全局 CORS 中间件
-        pass
-
     @app.get("/minimax_api/status")
     def api_status(model_id: Optional[str] = None):
         return get_gpu_status_dict(model_id=model_id)
@@ -8340,10 +8335,13 @@ def attach_macos_api_routes(app: FastAPI):
     @app.post("/minimax_api/config_api_key")
     def api_config_api_key(req: ApiKeyConfigRequest):
         global API_AUTH_KEY
-        API_AUTH_KEY = (req.api_key or "").strip()
+        key = req.api_key.strip()
+        if not key:
+            raise HTTPException(status_code=422, detail="An inference API key is required")
+        with API_KEY_LOCK:
+            if not req.initialize_only or API_AUTH_KEY == INITIAL_API_KEY:
+                API_AUTH_KEY = key
         touch_activity()
-        state_str = "已开启密钥鉴权" if API_AUTH_KEY else "已设为免密开放模式"
-        print(f"[API 网关] 对外协议网关 ({state_str})")
         return get_gpu_status_dict()
 
     # --------------------------------------------------------------------------
@@ -9738,19 +9736,30 @@ def create_ui() -> gr.Blocks:
 
 
 if __name__ == "__main__":
-    ui = create_ui()
-    ui.queue()
-    app, local_url, share_url = ui.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=True,
-        inline=False,
-        prevent_thread_lock=True,
-        css=CUSTOM_CSS,
-    )
-    attach_macos_api_routes(app)
-    print("\n" + "=" * 72)
-    print("🍎 【macOS 原生 App 连接地址】请复制下方链接粘贴到 Mac 客户端：")
-    print(f"👉  {share_url or local_url}")
-    print("=" * 72 + "\n")
-    ui.block_thread()
+    import getpass
+    from gradio import networking
+
+    password = _DEPLOY_PASSWORD or getpass.getpass("Management password (24+ URL-safe characters): ")
+    # Unwind the ingress context on a headless hot redeploy (pkill sends TERM).
+    def stop_server(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop_server)
+    with authenticated_ingress(password):
+        ui = create_ui()
+        ui.queue()
+        app, _, _ = ui.launch(
+            server_name="127.0.0.1", server_port=GRADIO_BACKEND, share=False,
+            inline=False, prevent_thread_lock=True, css=CUSTOM_CSS,
+        )
+        attach_macos_api_routes(app)
+        tunnel = networking.setup_tunnel(
+            local_host="127.0.0.1", local_port=GRADIO_INGRESS, share_token=ui.share_token,
+            share_server_address=None, share_server_tls_certificate=None,
+        )
+        share_url = urllib.parse.urlsplit(tunnel)._replace(scheme="https").geturl()
+        print(f"EasyColab URL: {share_url}", flush=True)
+        try:
+            ui.block_thread()
+        finally:
+            ui.close()

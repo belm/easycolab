@@ -62,6 +62,26 @@ WIN_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 from windows_app.viewmodel_services import ViewModelServicesMixin
 
 
+class _AdminSession(requests.Session):
+    """Validate the prepared destination before each send, including redirects."""
+
+    def __init__(self, base_url: str):
+        super().__init__()
+        self.origin = self._https_origin(requests.Request("GET", base_url).prepare().url)
+
+    @staticmethod
+    def _https_origin(url: str):
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username is not None:
+            raise requests.exceptions.InvalidURL("Management requests require an HTTPS origin")
+        return parsed.hostname, 443 if parsed.port is None else parsed.port
+
+    def send(self, request, **kwargs):
+        if self._https_origin(request.url) != self.origin:
+            raise requests.exceptions.InvalidURL("Management request left the connected HTTPS origin")
+        return super().send(request, **kwargs)
+
+
 class EasyColabViewModel(ViewModelServicesMixin, QObject):
     """Central state & async controller emitting Qt signals onto the GUI thread."""
 
@@ -103,7 +123,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
         self.reasoning_effort: str = str(self._settings.get("reasoningEffort", "medium"))
         if self.reasoning_effort not in {"low", "medium", "high", "xhigh"}:
             self.reasoning_effort = "medium"
-        self.api_key_enabled: bool = bool(self._settings.get("apiKeyEnabled", True))
+        self.api_key_enabled = True
         self.api_access_key: str = str(self._settings.get("apiAccessKey", "")).strip()
         if not self.api_access_key:
             self.api_access_key = "sk-colab-" + secrets.token_hex(10)
@@ -400,6 +420,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
     def set_colab_server_url(self, url: str) -> None:
         cleaned = (url or "").strip()
         if cleaned != self.colab_server_url:
+            self._remote_api_key_synced = False
             self.colab_server_url = cleaned
             self._save_setting("colabServerURL", cleaned)
             self.state_changed.emit()
@@ -447,6 +468,29 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
             self.sync_context_length_to_colab()
 
     # ─── Computed Properties ─────────────────────────────────────────────────
+
+    @property
+    def admin_password(self) -> str:
+        return self._settings.get("adminPasswordsByURL", {}).get(self.normalized_base_url, "")
+
+    def set_admin_password(self, password: str) -> None:
+        address = self.normalized_base_url
+        if not address:
+            return
+        passwords = dict(self._settings.get("adminPasswordsByURL", {}))
+        if password:
+            passwords[address] = password
+        else:
+            passwords.pop(address, None)
+        self._save_setting("adminPasswordsByURL", passwords)
+
+    def _admin_request(self, method: str, url: str, **kwargs):
+        address = self.normalized_base_url
+        password = self._settings.get("adminPasswordsByURL", {}).get(address, "")
+        if not password:
+            raise ValueError("Enter the management password or use Wake & Deploy")
+        with _AdminSession(address) as session:
+            return session.request(method, url, auth=("easycolab", password), **kwargs)
 
     @property
     def normalized_base_url(self) -> str:
@@ -842,9 +886,9 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
             self._remote_idle_synced = True
             if d.get("idle_timeout_minutes") != self.idle_timeout_minutes:
                 self.update_idle_timeout_config(self.idle_timeout_minutes)
-        if self.api_key_enabled and not bool(d.get("api_key_enabled", False)) and not self._remote_api_key_synced:
+        if not d.get("api_key_configured", False) and not self._remote_api_key_synced:
             self._remote_api_key_synced = True
-            self.sync_api_key_to_colab()
+            self.sync_api_key_to_colab(initialize_only=True)
 
         self._record_telemetry_sample(force=not was_connected)
         self.state_changed.emit()
@@ -869,7 +913,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
 
         def worker() -> None:
             try:
-                r = requests.get(
+                r = self._admin_request("GET",
                     f"{base}/minimax_api/status",
                     params={"model_id": target_model},
                     timeout=timeout_s,
@@ -941,7 +985,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
 
             def worker() -> None:
                 try:
-                    r = requests.post(
+                    r = self._admin_request("POST",
                         f"{base}/minimax_api/select_model",
                         json={"model_id": model_id},
                         timeout=30,
@@ -978,7 +1022,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
 
         def worker() -> None:
             try:
-                r = requests.post(
+                r = self._admin_request("POST",
                     f"{base}/minimax_api/download_model",
                     json={"model_id": target_model, "hf_token": self.hf_token.strip()},
                     timeout=60,
@@ -988,7 +1032,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
                 while True:
                     time.sleep(1.5)
-                    sr = requests.get(
+                    sr = self._admin_request("GET",
                         f"{base}/minimax_api/status",
                         params={"model_id": target_model},
                         timeout=25,
@@ -1045,13 +1089,13 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/load_model", json=payload, timeout=60)
+                r = self._admin_request("POST", f"{base}/minimax_api/load_model", json=payload, timeout=60)
                 if r.status_code == 200:
                     data = r.json()
                     self._dispatch_ui(lambda: self._apply_status_response(data, update_status_msg=True))
                 while True:
                     time.sleep(1.5)
-                    sr = requests.get(
+                    sr = self._admin_request("GET",
                         f"{base}/minimax_api/status",
                         params={"model_id": target_model},
                         timeout=25,
@@ -1096,7 +1140,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
 
         def worker() -> None:
             try:
-                r = requests.post(
+                r = self._admin_request("POST",
                     f"{base}/minimax_api/unload_model",
                     json={"model_id": target},
                     timeout=20,
@@ -1235,7 +1279,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
 
         def worker() -> None:
             try:
-                r = requests.post(f"{base}/minimax_api/generate", json=payload, timeout=30)
+                r = self._admin_request("POST", f"{base}/minimax_api/generate", json=payload, timeout=30)
                 if r.status_code != 200:
                     err_txt = r.text[:200]
                     raise RuntimeError(f"HTTP {r.status_code}: {err_txt}")
@@ -1284,7 +1328,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
         save_dir = get_local_save_dir()
         safe_name = Path(filename).name
         dst = save_dir / safe_name
-        r = requests.get(full_url, timeout=180)
+        r = self._admin_request("GET", full_url, timeout=180)
         if r.status_code == 200 and r.content:
             dst.write_bytes(r.content)
             if elapsed is not None and elapsed > 0:
@@ -1311,7 +1355,7 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
                 return
 
             try:
-                r = requests.get(f"{base}/minimax_api/job/{job_id}", timeout=30)
+                r = self._admin_request("GET", f"{base}/minimax_api/job/{job_id}", timeout=30)
                 if r.status_code == 404:
                     consecutive_404 += 1
                     if consecutive_404 >= 5:
@@ -1484,10 +1528,9 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
                 daemon=True,
             ).start()
 
-    @staticmethod
-    def _safe_post_empty(url: str, timeout: int = 12) -> None:
+    def _safe_post_empty(self, url: str, timeout: int = 12) -> None:
         try:
-            requests.post(url, json={}, timeout=timeout)
+            self._admin_request("POST", url, json={}, timeout=timeout)
         except Exception:
             pass
 

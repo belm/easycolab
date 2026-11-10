@@ -69,7 +69,7 @@ if sys.platform == "win32":
         win_version_info = None
 
 datas = []
-for res_name in ("VERSION", "app.py", "colab_bridge.py", "EasyColab_Server.ipynb", "requirements.txt"):
+for res_name in ("VERSION", "app.py", "runtime_auth.py", "colab_bridge.py", "EasyColab_Server.ipynb", "requirements.txt"):
     src = PROJECT_ROOT / res_name
     if src.exists():
         datas.append((str(src), "."))
@@ -137,6 +137,10 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+
+# Qt uses the Windows system ICU ABI. An unrelated icuuc.dll found on the
+# build machine's PATH (e.g. Poppler's) can shadow System32 and break QtCore.
+a.binaries = [entry for entry in a.binaries if Path(entry[0]).name.lower() != "icuuc.dll"]
 
 pyz = PYZ(a.pure)
 

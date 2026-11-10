@@ -523,6 +523,15 @@ struct MainStudioView: View {
             .help(L("打开新手引导与部署指南", "Open quick start & deployment guide"))
         }
 
+        HStack {
+            Text(L("用户名：easycolab", "User: easycolab"))
+            SecureField(L("管理密码", "Management password"), text: $vm.adminPassword)
+            Button(L("复制密码", "Copy password")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(vm.adminPassword, forType: .string)
+            }
+        }
+
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 StatusDot(color: vm.isConnected ? .green : .orange)

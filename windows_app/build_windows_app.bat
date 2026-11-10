@@ -60,7 +60,12 @@ set "ZIP_OUT=%PROJECT_ROOT%\EasyColab-Windows-x64.zip"
 if exist "%ZIP_OUT%" del /f /q "%ZIP_OUT%"
 
 echo 正在打包免安装绿色发行版压缩包 EasyColab-Windows-x64.zip ...
-powershell -NoProfile -Command "Compress-Archive -Path '%PROJECT_ROOT%\dist\EasyColab' -DestinationPath '%ZIP_OUT%' -Force"
+"%VENV_DIR%\Scripts\python.exe" -m zipfile -c "%ZIP_OUT%" "%PROJECT_ROOT%\dist\EasyColab"
+if errorlevel 1 (
+    echo [错误] 发行压缩包生成失败。
+    popd
+    exit /b 1
+)
 
 echo.
 echo [完成] Windows 客户端编译成功！

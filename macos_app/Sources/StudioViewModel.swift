@@ -6,6 +6,26 @@ import ObjectiveC.runtime
 
 // MARK: - 核心视图模型 (ViewModel)
 
+final class SameOriginAdminRedirect: NSObject, URLSessionTaskDelegate {
+    static func permits(_ target: URL?, from origin: URL?) -> Bool {
+        guard let target, let origin, let host = origin.host, !host.isEmpty,
+              target.scheme?.lowercased() == "https", origin.scheme?.lowercased() == "https",
+              target.user == nil, target.password == nil, origin.user == nil, origin.password == nil else { return false }
+        return target.host?.lowercased() == host.lowercased() && (target.port ?? 443) == (origin.port ?? 443)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let original = task.originalRequest, Self.permits(request.url, from: original.url) else {
+            completionHandler(nil)
+            return
+        }
+        var redirected = request
+        redirected.setValue(original.value(forHTTPHeaderField: "Authorization"), forHTTPHeaderField: "Authorization")
+        completionHandler(redirected)
+    }
+}
+
 @MainActor
 class StudioViewModel: ObservableObject {
     var cachedBridgePythonBin: String? = nil
@@ -28,8 +48,42 @@ class StudioViewModel: ObservableObject {
         return "https://••••••••••••"
     }
 
+    static func normalizeServerURL(_ rawURL: String) -> String {
+        var raw = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while raw.hasSuffix("/") { raw.removeLast() }
+        return raw
+    }
+
+    private static func savedAdminPassword(for address: String) -> String {
+        let normalized = normalizeServerURL(address)
+        guard !normalized.isEmpty else { return "" }
+        let passwords = UserDefaults.standard.dictionary(forKey: "adminPasswordsByURL") as? [String: String]
+        return passwords?[normalized] ?? passwords?[address] ?? ""
+    }
+
     @Published var colabServerURL: String = UserDefaults.standard.string(forKey: "colabServerURL") ?? "" {
-        didSet { UserDefaults.standard.set(colabServerURL, forKey: "colabServerURL") }
+        didSet {
+            if Self.normalizeServerURL(oldValue) != Self.normalizeServerURL(colabServerURL) {
+                adminPassword = Self.savedAdminPassword(for: colabServerURL)
+                remoteApiKeySynced = false
+            }
+            UserDefaults.standard.set(colabServerURL, forKey: "colabServerURL")
+        }
+    }
+
+    @Published var adminPassword = StudioViewModel.savedAdminPassword(
+        for: UserDefaults.standard.string(forKey: "colabServerURL") ?? ""
+    ) {
+        didSet {
+            let key = normalizedBaseURL
+            guard !key.isEmpty, adminPassword != Self.savedAdminPassword(for: key) else { return }
+            var passwords = UserDefaults.standard.dictionary(forKey: "adminPasswordsByURL") as? [String: String] ?? [:]
+            passwords[key] = adminPassword.isEmpty ? nil : adminPassword
+            if colabServerURL != key {
+                passwords.removeValue(forKey: colabServerURL)
+            }
+            UserDefaults.standard.set(passwords, forKey: "adminPasswordsByURL")
+        }
     }
     @Published var hfToken: String = UserDefaults.standard.string(forKey: "hfToken") ?? "" {
         didSet { UserDefaults.standard.set(hfToken, forKey: "hfToken") }
@@ -270,15 +324,7 @@ class StudioViewModel: ObservableObject {
     @Published var presencePenalty: Double = 0.0
     @Published var chatHistory: [ChatTurnItem] = []
 
-    @Published var apiKeyEnabled: Bool = {
-        if UserDefaults.standard.object(forKey: "apiKeyEnabled") == nil { return true }
-        return UserDefaults.standard.bool(forKey: "apiKeyEnabled")
-    }() {
-        didSet {
-            UserDefaults.standard.set(apiKeyEnabled, forKey: "apiKeyEnabled")
-            Task { await syncApiKeyToColab() }
-        }
-    }
+    let apiKeyEnabled = true
     @Published var apiAccessKey: String = {
         if let saved = UserDefaults.standard.string(forKey: "apiAccessKey"), !saved.isEmpty {
             return saved
@@ -670,11 +716,11 @@ class StudioViewModel: ObservableObject {
         let base = normalizedBaseURL
         guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/select_model") else { return }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: ["model_id": modelId])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
             if isSelectedModelLoadedInVRAM {
@@ -696,10 +742,19 @@ class StudioViewModel: ObservableObject {
         } catch {}
     }
 
+    let adminSession = URLSession(configuration: .ephemeral, delegate: SameOriginAdminRedirect(), delegateQueue: nil)
+
+    func adminRequest(_ url: URL) throws -> URLRequest {
+        guard SameOriginAdminRedirect.permits(url, from: URL(string: normalizedBaseURL)),
+              !adminPassword.isEmpty else { throw URLError(.userAuthenticationRequired) }
+        var request = URLRequest(url: url)
+        let encoded = Data("easycolab:\(adminPassword)".utf8).base64EncodedString()
+        request.setValue("Basic " + encoded, forHTTPHeaderField: "Authorization")
+        return request
+    }
+
     var normalizedBaseURL: String {
-        var raw = colabServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        while raw.hasSuffix("/") { raw.removeLast() }
-        return raw
+        Self.normalizeServerURL(colabServerURL)
     }
 
     var formattedUptime: String {
@@ -753,9 +808,9 @@ class StudioViewModel: ObservableObject {
             )
         }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.timeoutInterval = isGenerating ? 28 : (silent ? 20 : 22)
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await adminSession.data(for: req)
             let statusCode = (resp as? HTTPURLResponse)?.statusCode ?? 0
 
             if statusCode == 404 {
@@ -833,11 +888,11 @@ class StudioViewModel: ObservableObject {
         let base = normalizedBaseURL
         guard isConnected, !base.isEmpty, let url = URL(string: "\(base)/minimax_api/config_idle") else { return }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: ["idle_timeout_minutes": minutes])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
         } catch {}
@@ -859,7 +914,7 @@ class StudioViewModel: ObservableObject {
         )
 
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: [
@@ -869,14 +924,14 @@ class StudioViewModel: ObservableObject {
                 "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
                 "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
             ])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
 
             while isDownloadingWeights {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if let statusURL = URL(string: "\(base)/minimax_api/status?model_id=\(targetModel)"),
-                   let (sData, _) = try? await URLSession.shared.data(from: statusURL),
+                   let (sData, _) = try? await adminSession.data(for: adminRequest(statusURL)),
                    let sDecoded = try? JSONDecoder().decode(ColabStatusResponse.self, from: sData) {
                     applyStatusResponse(sDecoded)
                     if let msg = sDecoded.task_message, !msg.isEmpty { statusMessage = msg }
@@ -926,7 +981,7 @@ class StudioViewModel: ObservableObject {
         }
 
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let body: [String: Any] = [
@@ -941,14 +996,14 @@ class StudioViewModel: ObservableObject {
             ]
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
 
             while isLoadingModel {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 if let statusURL = URL(string: "\(base)/minimax_api/status?model_id=\(targetModel)"),
-                   let (sData, _) = try? await URLSession.shared.data(from: statusURL),
+                   let (sData, _) = try? await adminSession.data(for: adminRequest(statusURL)),
                    let sDecoded = try? JSONDecoder().decode(ColabStatusResponse.self, from: sData) {
                     applyStatusResponse(sDecoded)
                     if let msg = sDecoded.task_message, !msg.isEmpty { statusMessage = msg }
@@ -995,12 +1050,12 @@ class StudioViewModel: ObservableObject {
         )
 
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 20
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: ["model_id": modelId])
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await adminSession.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 200 {
                 let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
@@ -1051,10 +1106,10 @@ class StudioViewModel: ObservableObject {
         let base = normalizedBaseURL
         guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/cancel") else { return }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 12
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await adminSession.data(for: req)
             if (resp as? HTTPURLResponse)?.statusCode == 200,
                let decoded = try? JSONDecoder().decode(ColabStatusResponse.self, from: data) {
                 applyStatusResponse(decoded)
@@ -1159,7 +1214,7 @@ class StudioViewModel: ObservableObject {
         }
 
         do {
-            var req = URLRequest(url: submitURL)
+            var req = try adminRequest(submitURL)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.timeoutInterval = 30
@@ -1206,7 +1261,7 @@ class StudioViewModel: ObservableObject {
             }
 
             req.httpBody = try JSONSerialization.data(withJSONObject: payload)
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             guard activeGenerationToken == myToken else { return }
             let job = try JSONDecoder().decode(ColabJobResponse.self, from: data)
 
@@ -1256,9 +1311,9 @@ class StudioViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: pollIntervalNs)
             guard isGenerating && activeGenerationToken == token else { break }
             do {
-                var req = URLRequest(url: pollURL)
+                var req = try adminRequest(pollURL)
                 req.timeoutInterval = 30
-                let (data, resp) = try await URLSession.shared.data(for: req)
+                let (data, resp) = try await adminSession.data(for: req)
                 guard isGenerating && activeGenerationToken == token else { break }
                 let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if code == 404 {
@@ -1411,7 +1466,8 @@ class StudioViewModel: ObservableObject {
         keepGeneratingProgress: Bool = false
     ) async {
         do {
-            let (tempURL, _) = try await URLSession.shared.download(from: remoteURL)
+            let (tempURL, response) = try await adminSession.download(for: adminRequest(remoteURL))
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
             let destURL = localSaveDir.appendingPathComponent(filename)
             if FileManager.default.fileExists(atPath: destURL.path) {
                 try FileManager.default.removeItem(at: destURL)
@@ -1453,11 +1509,10 @@ class StudioViewModel: ObservableObject {
             "Terminating cloud Colab instances & syncing billing status..."
         )
         let base = normalizedBaseURL
-        if !base.isEmpty, let url = URL(string: "\(base)/minimax_api/disconnect") {
-            var req = URLRequest(url: url)
+        if !base.isEmpty, let url = URL(string: "\(base)/minimax_api/disconnect"), var req = try? adminRequest(url) {
             req.httpMethod = "POST"
             req.timeoutInterval = 8
-            _ = try? await URLSession.shared.data(for: req)
+            _ = try? await adminSession.data(for: req)
         }
 
         if cliLoggedIn {

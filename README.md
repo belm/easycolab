@@ -8,6 +8,14 @@
 
 ![EasyColab 工作台界面预览](./shot.png)
 
+### 使用经过鉴权的公网入口
+
+可以在同一台 VM 上重新部署。如果从原版升级时 ComfyUI 正占用端口 `8188`，请先停止该 ComfyUI 进程，再启动新版。此后在同一台 VM 上热重启 EasyColab 时，它会尝试重新接管仍在运行的 ComfyUI 画布。点击「唤醒并部署」后，桌面客户端会生成管理密码，并按服务地址明文保存在本机设置中。打开 Gradio 或 ComfyUI 时，在浏览器的登录框填写用户名 `easycolab`，密码可从桌面端服务地址旁复制。手动运行 Notebook 时，在隐藏输入框设置 24 至 256 位管理密码（字母、数字、下划线或连字符），再将服务地址和密码填入桌面端。重开客户端后会自动取回该服务地址的管理密码。
+
+OpenAI 和 Anthropic 兼容接口使用桌面端「API 网关」中的独立推理密钥。管理密码只交给可信的管理员。运行时使用 nginx 和 OpenSSL 保护两个隧道，支持媒体流和 WebSocket。直接启动 `app.py` 需要在 Linux 环境安装这两个程序，并在提示时输入管理密码。
+
+Drive 无浏览器挂载仍可能将带有 Colab 和 Cloud Platform 授权的 Google 刷新令牌复制到 VM。与服务同用户运行的第三方节点可以读取它。仅安装可信节点，业务资料使用独立账号隔离。
+
 ---
 
 ## 核心特性
@@ -172,9 +180,9 @@ bash android_app/install_release_android.sh
 ## 隐私与安全建议
 
 1. **录屏 / 截图防泄密开关**：在左侧「服务地址」输入框旁提供了 **打码保护开关**（macOS 为眼睛图标，Windows 为「打码」按钮）。在录制教程、直播或截图分享前，请开启打码隐藏你的 `*.gradio.live` 与 `*.trycloudflare.com` 临时公网隧道域名及账号邮箱，防止他人通过链接蹭用你的云端 GPU。
-2. **开启 API Key 鉴权**：对外使用 Qwen API 网关时，请保持「启用 API Key 鉴权」处于开启状态。
+2. **推理密钥**：外部工具通过 Bearer 或 `x-api-key` 提交 API 网关面板中的推理密钥。
 3. **本地凭证与数据目录**：
-   - Google OAuth 授权凭证仅保存在本机 `~/.config/colab-cli/token.json`（Windows 为 `%USERPROFILE%\.config\colab-cli\token.json`），不会上传至任何第三方服务器。
+   - 桥接程序读取本机 `~/.config/colab-cli/token.json`。无浏览器挂载 Drive 时，刷新令牌也会写入云端实例的 rclone 配置。
    - Windows 客户端本地配置文件位于 `%LOCALAPPDATA%\EasyColab\settings.json`，成片默认保存于 `%USERPROFILE%\Videos\EasyColab`。
 
 ---

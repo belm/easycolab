@@ -19,7 +19,7 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 # 内置服务端与桥接资源，支持将 EasyColab.app 独立拖入 /Applications 开箱即用
-for res_file in "VERSION" "app.py" "colab_bridge.py" "EasyColab_Server.ipynb" "requirements.txt"; do
+for res_file in "VERSION" "app.py" "runtime_auth.py" "colab_bridge.py" "EasyColab_Server.ipynb" "requirements.txt"; do
     if [ -f "${PROJECT_ROOT}/${res_file}" ]; then
         cp -f "${PROJECT_ROOT}/${res_file}" "${RESOURCES_DIR}/${res_file}"
     fi

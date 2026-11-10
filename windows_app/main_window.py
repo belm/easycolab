@@ -457,6 +457,18 @@ class EasyColabMainWindow(WorkspaceMixin, QMainWindow):
         url_row.addWidget(help_mini)
         card.body.addLayout(url_row)
 
+        auth_row = QHBoxLayout()
+        auth_row.addWidget(QLabel(tr("用户名：easycolab", "User: easycolab")))
+        self.admin_input = QLineEdit()
+        self.admin_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.admin_input.setPlaceholderText(tr("管理密码", "Management password"))
+        self.admin_input.textEdited.connect(self.vm.set_admin_password)
+        auth_row.addWidget(self.admin_input)
+        copy_admin = QPushButton(tr("复制密码", "Copy password"))
+        copy_admin.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.vm.admin_password))
+        auth_row.addWidget(copy_admin)
+        card.body.addLayout(auth_row)
+
         # Row 4: Hardware Status + Chart Mode Toggle
         hw_hdr = QHBoxLayout()
         hw_hdr.setSpacing(5)
@@ -1351,6 +1363,8 @@ class EasyColabMainWindow(WorkspaceMixin, QMainWindow):
 
         if not self.url_input.hasFocus():
             self.url_input.setText(self.vm.colab_server_url)
+        if self.admin_input.text() != self.vm.admin_password:
+            self.admin_input.setText(self.vm.admin_password)
         self.url_input.setEchoMode(
             QLineEdit.EchoMode.Password if self.vm.mask_server_url else QLineEdit.EchoMode.Normal
         )

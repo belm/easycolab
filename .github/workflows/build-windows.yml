@@ -11,6 +11,7 @@ on:
       - "windows_app/**"
       - "colab_bridge.py"
       - "app.py"
+      - "runtime_auth.py"
       - "EasyColab_Server.ipynb"
       - ".github/workflows/build-windows.yml"
     tags:
@@ -50,7 +51,7 @@ jobs:
             --workpath build/pyinstaller `
             windows_app/EasyColab.spec
 
-      - name: Smoke-test packaged EasyColab.exe (CLI bridge & Qt offscreen boot)
+      - name: Smoke-test packaged EasyColab.exe (CLI bridge & native main window)
         shell: pwsh
         run: |
           $out = & .\dist\EasyColab\EasyColab.exe --bridge-cli auth_status
@@ -58,8 +59,7 @@ jobs:
           if (-not ($out -match '"ok"')) {
             throw "EasyColab.exe --bridge-cli smoke test failed!"
           }
-          $env:QT_QPA_PLATFORM = "offscreen"
-          python -c "from PySide6.QtWidgets import QApplication; from windows_app.viewmodel import EasyColabViewModel; from windows_app.main_window import EasyColabMainWindow; app = QApplication([]); vm = EasyColabViewModel(); vm.has_seen_onboarding = True; w = EasyColabMainWindow(vm); w.show(); app.processEvents(); w.close(); print('Qt UI smoke test passed!')"
+          & .\windows_app\test_packaged_window.ps1 -ExePath .\dist\EasyColab\EasyColab.exe
 
       - name: Package EasyColab-Windows-x64.zip
         shell: pwsh

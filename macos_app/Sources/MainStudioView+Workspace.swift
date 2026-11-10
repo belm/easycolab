@@ -771,11 +771,7 @@ extension MainStudioView {
                 )
             ) {
                 HStack(spacing: 12) {
-                    Toggle(
-                        L("启用 API Key 鉴权（同时校验 Bearer 与 x-api-key）",
-                          "Require API Key Auth (validates both Bearer & x-api-key)"),
-                        isOn: $vm.apiKeyEnabled
-                    )
+                    Text(L("API Key 鉴权已启用", "API key authentication is required"))
                         .font(.callout.weight(.medium))
 
                     Spacer()

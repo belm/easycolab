@@ -587,6 +587,7 @@ struct ColabStatusResponse: Codable {
     var idle_timeout_minutes: Int?
     var idle_remaining_seconds: Int?
     var api_key_enabled: Bool?
+    var api_key_configured: Bool?
     var api_request_count: Int?
     var console_lines: [String]?
 

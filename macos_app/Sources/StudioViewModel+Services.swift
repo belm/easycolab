@@ -249,12 +249,14 @@ extension StudioViewModel {
         }
         let script = self.bridgeScript
         let gpu = self.wakeGPUChoice
+        let password = UUID().uuidString + UUID().uuidString
         let appPy = self.appPyPath
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: pyBin)
+                proc.environment = ProcessInfo.processInfo.environment.merging(["EASYCOLAB_ADMIN_PASSWORD": password]) { _, new in new }
                 proc.arguments = [script, "wake", "--gpu", gpu, "--app-py", appPy]
                 let pipe = Pipe()
                 proc.standardOutput = pipe
@@ -271,6 +273,7 @@ extension StudioViewModel {
                             if line.hasPrefix("WAKE_URL:") {
                                 let url = String(line.dropFirst("WAKE_URL:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
                                 self.colabServerURL = url
+                                self.adminPassword = password
                                 self.liveConsoleLines.append(L(
                                     "成功获取云端隧道地址: \(self.maskedURLDisplay(url))",
                                     "Obtained public tunnel URL: \(self.maskedURLDisplay(url))"
@@ -500,10 +503,9 @@ extension StudioViewModel {
             }
         }
         apiRequestCount = decoded.api_request_count ?? apiRequestCount
-        let remoteHasKey = decoded.api_key_enabled ?? false
-        if apiKeyEnabled && !remoteHasKey && !remoteApiKeySynced {
+        if decoded.api_key_configured == false && !remoteApiKeySynced {
             remoteApiKeySynced = true
-            Task { await syncApiKeyToColab() }
+            Task { await syncApiKeyToColab(initializeOnly: true) }
         }
         if let lines = decoded.console_lines, !lines.isEmpty {
             liveConsoleLines = lines
@@ -623,10 +625,9 @@ extension StudioViewModel {
                 URLQueryItem(name: "force_refresh", value: forceRefresh ? "true" : "false"),
                 URLQueryItem(name: "search_query", value: sq)
             ]
-            if let url = comps?.url {
-                var req = URLRequest(url: url)
+            if let url = comps?.url, var req = try? adminRequest(url) {
                 req.timeoutInterval = 12
-                if let (data, resp) = try? await URLSession.shared.data(for: req),
+                if let (data, resp) = try? await adminSession.data(for: req),
                    (resp as? HTTPURLResponse)?.statusCode == 200,
                    let dec = try? JSONDecoder().decode(HFTrendingAPIResponse.self, from: data),
                    let models = dec.models, !models.isEmpty {
@@ -759,10 +760,9 @@ extension StudioViewModel {
                 URLQueryItem(name: "repo_id", value: cleanId),
                 URLQueryItem(name: "hf_token", value: tok)
             ]
-            if let url = comps?.url {
-                var req = URLRequest(url: url)
+            if let url = comps?.url, var req = try? adminRequest(url) {
                 req.timeoutInterval = 14
-                if let (data, resp) = try? await URLSession.shared.data(for: req),
+                if let (data, resp) = try? await adminSession.data(for: req),
                    (resp as? HTTPURLResponse)?.statusCode == 200,
                    var dec = try? JSONDecoder().decode(HFModelDetailInfo.self, from: data),
                    dec.ok == true {
@@ -958,7 +958,7 @@ extension StudioViewModel {
         let base = normalizedBaseURL
         if isConnected, !base.isEmpty, let url = URL(string: "\(base)/minimax_api/custom_model/register") {
             do {
-                var req = URLRequest(url: url)
+                var req = try adminRequest(url)
                 req.httpMethod = "POST"
                 req.timeoutInterval = 35
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -971,7 +971,7 @@ extension StudioViewModel {
                     "modality_hint": modPref,
                     "hf_token": hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
                 ])
-                let (data, _) = try await URLSession.shared.data(for: req)
+                let (data, _) = try await adminSession.data(for: req)
                 let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
                 if decoded.action_ok == false {
                     let srvMsg = decoded.action_message ?? ""
@@ -1068,7 +1068,7 @@ extension StudioViewModel {
         let base = normalizedBaseURL
         guard isConnected, !base.isEmpty, let url = URL(string: "\(base)/minimax_api/custom_model/remove") else { return }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 20
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1076,7 +1076,7 @@ extension StudioViewModel {
                 "model_id": spec.id,
                 "delete_weights": false
             ])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
         } catch {}
@@ -1100,7 +1100,7 @@ extension StudioViewModel {
         statusMessage = tip
 
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 30
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1108,7 +1108,7 @@ extension StudioViewModel {
                 "unload_existing": comfyUnloadOthersOnStart,
                 "force_restart": forceRestart
             ])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
 
@@ -1148,10 +1148,10 @@ extension StudioViewModel {
             "Syncing custom nodes & workflows to Google Drive and stopping ComfyUI..."
         )
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 35
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
             statusMessage = comfyStatusMessage
@@ -1167,10 +1167,10 @@ extension StudioViewModel {
         let base = normalizedBaseURL
         guard isConnected, !base.isEmpty, let url = URL(string: "\(base)/minimax_api/comfyui/free_vram") else { return }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 20
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
             if let am = decoded.action_message, !am.isEmpty {
@@ -1188,10 +1188,10 @@ extension StudioViewModel {
             "Syncing ComfyUI custom nodes, models & workflows to Google Drive..."
         )
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 90
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
             if let am = decoded.action_message, !am.isEmpty {
@@ -1227,7 +1227,7 @@ extension StudioViewModel {
             "Downloading weights via 8-thread cloud channel to ComfyUI/models/\(comfyWeightSubfolder)..."
         )
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 25
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1237,7 +1237,7 @@ extension StudioViewModel {
                 "subfolder": comfyWeightSubfolder,
                 "hf_token": hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
             ])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             applyStatusResponse(decoded)
 
@@ -1275,7 +1275,7 @@ extension StudioViewModel {
         statusMessage = tip
 
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.timeoutInterval = 30
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1284,7 +1284,7 @@ extension StudioViewModel {
                 "auto_start": true,
                 "hf_token": hfToken.trimmingCharacters(in: .whitespacesAndNewlines)
             ])
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await adminSession.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 404 {
                 comfyDownloadingWeight = false
@@ -1335,7 +1335,7 @@ extension StudioViewModel {
         )
         defer { comfyPullingOutputRelPath = nil }
         do {
-            let (tmpURL, resp) = try await URLSession.shared.download(from: url)
+            let (tmpURL, resp) = try await adminSession.download(for: adminRequest(url))
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
                 statusMessage = L(
                     "拉取成片失败: 云端文件不存在或尚未写入完成",
@@ -1378,16 +1378,17 @@ extension StudioViewModel {
         Task { await syncApiKeyToColab() }
     }
 
-    func syncApiKeyToColab() async {
+    func syncApiKeyToColab(initializeOnly: Bool = false) async {
         let base = normalizedBaseURL
         guard isConnected, !base.isEmpty, let url = URL(string: "\(base)/minimax_api/config_api_key") else { return }
-        let payloadKey = apiKeyEnabled ? apiAccessKey.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let payloadKey = apiAccessKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payloadKey.isEmpty else { return }
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: ["api_key": payloadKey])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["api_key": payloadKey, "initialize_only": initializeOnly])
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             remoteApiKeySynced = true
             applyStatusResponse(decoded)
@@ -1399,11 +1400,11 @@ extension StudioViewModel {
         guard isConnected, !base.isEmpty, let url = URL(string: "\(base)/minimax_api/config_context") else { return }
         let targetTokens = contextLengthTokens
         do {
-            var req = URLRequest(url: url)
+            var req = try adminRequest(url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: ["context_length": targetTokens])
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
             remoteContextSynced = true
             applyStatusResponse(decoded)

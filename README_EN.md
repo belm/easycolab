@@ -8,6 +8,14 @@ Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` 
 
 ![EasyColab Studio Screenshot](./shot.png)
 
+### Authenticated public endpoints
+
+You can redeploy on the same VM. When upgrading from the original release, if ComfyUI is using port `8188`, stop that ComfyUI process before starting the new version. On subsequent restarts on the same VM, EasyColab will try to reconnect to the running ComfyUI canvas. Wake & Deploy generates a management password stored in plaintext in local settings for that server URL. For Gradio or ComfyUI, enter the browser username `easycolab` and copy the password from the desktop connection panel. With a manual notebook, enter a 24–256 character management password (letters, digits, underscores or hyphens) in the hidden prompt, then enter it and the service URL in the desktop client. Restarting the client restores the saved password for that server URL.
+
+OpenAI and Anthropic clients use the separate inference key in the API gateway panel. Share the management password only with administrators. The Linux runtime uses nginx and OpenSSL for both tunnels, including streaming and WebSockets. Install both before starting `app.py` directly.
+
+Headless Drive mounting can still copy a Google refresh token with Colab and Cloud Platform grants into the VM. Third-party nodes running under the same user can read it. Use trusted nodes and a separate account for evaluation.
+
 ---
 
 ## Key Features
@@ -165,9 +173,9 @@ bash android_app/install_release_android.sh
 ## Privacy & Security Best Practices
 
 1. **Screen-Recording / Screenshot Redaction Mode**: Next to the **Server URL** input in the left sidebar, toggle **Redact / Mask Mode** (eye icon on macOS, **Mask** button on Windows) before recording tutorials, streaming, or sharing screenshots. This masks your temporary `*.gradio.live` and `*.trycloudflare.com` tunnel URLs as well as your Google account email so others cannot access your cloud GPU.
-2. **Keep API Key Authentication Enabled**: When exposing the Qwen API Gateway to external tools, keep **Enable API Key Auth** turned on.
+2. **Inference credentials**. External tools must send the gateway key using Bearer or `x-api-key`.
 3. **Local Credentials & Data Locations**:
-   - Google OAuth tokens are stored strictly on your local machine at `~/.config/colab-cli/token.json` (`%USERPROFILE%\.config\colab-cli\token.json` on Windows) and are never uploaded to any third-party server.
+   - The bridge reads the local CLI credentials. Headless Drive mounting also writes a refresh token into the VM’s rclone configuration.
    - Windows client settings are stored at `%LOCALAPPDATA%\EasyColab\settings.json`, and generated media is saved by default to `%USERPROFILE%\Videos\EasyColab` (`~/Movies/EasyColab` on macOS).
 
 ---
