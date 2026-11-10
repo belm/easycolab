@@ -21,9 +21,11 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+VERSION_FILE = REPO_ROOT / "VERSION"
+APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.is_file() else "1.1.0"
 WIN_APP_DIR = REPO_ROOT / "windows_app"
 LAUNCHER_SRC_DIR = WIN_APP_DIR / "win_launcher"
 DIST_ROOT = REPO_ROOT / "dist"
@@ -110,8 +112,41 @@ def is_windows_os_dll(dll_name: str) -> bool:
     return any(low.startswith(pref) for pref in WINDOWS_SYSTEM_DLL_PREFIXES)
 
 
+def parse_win_version_quad(ver_str: str) -> Tuple[int, int, int, int]:
+    nums = [int(x) for x in re.findall(r"\d+", ver_str)[:4]]
+    while len(nums) < 4:
+        nums.append(0)
+    return nums[0], nums[1], nums[2], nums[3]
+
+
+def sync_launcher_version_metadata() -> None:
+    quad = parse_win_version_quad(APP_VERSION)
+    ver_comma = ",".join(str(n) for n in quad)
+    ver_dots4 = ".".join(str(n) for n in quad)
+
+    rc_path = LAUNCHER_SRC_DIR / "launcher.rc"
+    if rc_path.is_file():
+        rc_txt = rc_path.read_text(encoding="utf-8")
+        rc_txt = re.sub(r"(FILEVERSION\s+)\d+,\d+,\d+,\d+", rf"\g<1>{ver_comma}", rc_txt)
+        rc_txt = re.sub(r"(PRODUCTVERSION\s+)\d+,\d+,\d+,\d+", rf"\g<1>{ver_comma}", rc_txt)
+        rc_txt = re.sub(r'(VALUE\s+"FileVersion",\s+")[^"]*("\\0")', rf"\g<1>{ver_dots4}\g<2>", rc_txt)
+        rc_txt = re.sub(r'(VALUE\s+"ProductVersion",\s+")[^"]*("\\0")', rf"\g<1>{APP_VERSION}\g<2>", rc_txt)
+        rc_path.write_text(rc_txt, encoding="utf-8")
+
+    manifest_path = LAUNCHER_SRC_DIR / "app.manifest"
+    if manifest_path.is_file():
+        mf_txt = manifest_path.read_text(encoding="utf-8")
+        mf_txt = re.sub(
+            r'(name="EasyColab\.Studio\.Desktop"\s+version=")\d+\.\d+\.\d+\.\d+(")',
+            rf"\g<1>{ver_dots4}\g<2>",
+            mf_txt,
+        )
+        manifest_path.write_text(mf_txt, encoding="utf-8")
+
+
 def build_native_exe() -> None:
-    step("1/6 Compiling native x86_64 Windows GUI launcher (EasyColab.exe)...")
+    step(f"1/6 Compiling native x86_64 Windows GUI launcher (EasyColab.exe v{APP_VERSION})...")
+    sync_launcher_version_metadata()
     gcc = shutil.which("x86_64-w64-mingw32-gcc")
     windres = shutil.which("x86_64-w64-mingw32-windres")
     if not gcc or not windres:
@@ -314,8 +349,10 @@ def copy_app_sources_and_resources() -> None:
     step("5/6 Copying EasyColab application modules, icons & Colab server resources...")
     # Entry script & core resources in _internal/
     shutil.copy2(WIN_APP_DIR / "easycolab_win.py", INTERNAL_DIR / "easycolab_win.py")
-    for res_name in ("app.py", "colab_bridge.py", "EasyColab_Server.ipynb"):
-        shutil.copy2(REPO_ROOT / res_name, INTERNAL_DIR / res_name)
+    for res_name in ("VERSION", "app.py", "colab_bridge.py", "EasyColab_Server.ipynb"):
+        res_src = REPO_ROOT / res_name
+        if res_src.is_file():
+            shutil.copy2(res_src, INTERNAL_DIR / res_name)
 
     # Copy windows_app package
     dst_pkg = INTERNAL_DIR / "windows_app"

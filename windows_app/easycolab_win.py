@@ -126,8 +126,11 @@ def main() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    from windows_app import __version__
+
     app = QApplication(sys.argv)
     app.setApplicationName("EasyColab")
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("EasyColab")
 
     from windows_app.main_window import EasyColabMainWindow

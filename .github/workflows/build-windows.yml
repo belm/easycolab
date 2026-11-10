@@ -7,6 +7,7 @@ on:
       - main
       - master
     paths:
+      - "VERSION"
       - "windows_app/**"
       - "colab_bridge.py"
       - "app.py"

@@ -6,6 +6,11 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 APP_NAME="EasyColab"
 EXEC_NAME="EasyColab"
+VERSION_FILE="${PROJECT_ROOT}/VERSION"
+if [ -f "${VERSION_FILE}" ]; then
+    APP_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
+fi
+APP_VERSION="${APP_VERSION:-1.1.0}"
 BUNDLE_DIR="${PROJECT_ROOT}/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
@@ -14,7 +19,7 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 # 内置服务端与桥接资源，支持将 EasyColab.app 独立拖入 /Applications 开箱即用
-for res_file in "app.py" "colab_bridge.py" "EasyColab_Server.ipynb" "requirements.txt"; do
+for res_file in "VERSION" "app.py" "colab_bridge.py" "EasyColab_Server.ipynb" "requirements.txt"; do
     if [ -f "${PROJECT_ROOT}/${res_file}" ]; then
         cp -f "${PROJECT_ROOT}/${res_file}" "${RESOURCES_DIR}/${res_file}"
     fi
@@ -41,9 +46,9 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>${APP_VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
@@ -124,7 +129,7 @@ iconutil -c icns "${ICONSET_DIR}" -o "${RESOURCES_DIR}/AppIcon.icns"
 rm -rf "${ICONSET_DIR}"
 
 # 3. 编译原生 SwiftUI macOS 通用可执行程序 (兼容 macOS 13.0+ Ventura/Sonoma/Sequoia/Tahoe/27 及 Apple Silicon + Intel)
-echo "Compiling SwiftUI native macOS Universal app (${APP_NAME}, target macOS 13.0+)..."
+echo "Compiling SwiftUI native macOS Universal app (${APP_NAME} v${APP_VERSION}, target macOS 13.0+)..."
 swiftc -O \
     -target arm64-apple-macos13.0 \
     -parse-as-library \
@@ -133,6 +138,7 @@ swiftc -O \
     -framework AVKit \
     -framework UniformTypeIdentifiers \
     "${SCRIPT_DIR}/EasyColabStudio.swift" \
+    "${SCRIPT_DIR}"/Sources/*.swift \
     -o "${MACOS_DIR}/${EXEC_NAME}_arm64"
 
 if swiftc -O \
@@ -143,6 +149,7 @@ if swiftc -O \
     -framework AVKit \
     -framework UniformTypeIdentifiers \
     "${SCRIPT_DIR}/EasyColabStudio.swift" \
+    "${SCRIPT_DIR}"/Sources/*.swift \
     -o "${MACOS_DIR}/${EXEC_NAME}_x86_64" 2>/dev/null; then
     lipo -create -output "${MACOS_DIR}/${EXEC_NAME}" \
         "${MACOS_DIR}/${EXEC_NAME}_arm64" \
@@ -154,8 +161,14 @@ else
     echo "✅ Built arm64 Binary (minos 13.0)"
 fi
 
-# 4. 本地签名并刷新 macOS LaunchServices 图标缓存
+# 4. 本地签名并打包 EasyColab-macOS.zip 发行压缩包
+xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
 codesign --force --deep --sign - "${BUNDLE_DIR}"
 touch "${BUNDLE_DIR}"
 
+ZIP_PATH="${PROJECT_ROOT}/EasyColab-macOS.zip"
+rm -f "${ZIP_PATH}"
+ditto -c -k --sequesterRsrc --keepParent "${BUNDLE_DIR}" "${ZIP_PATH}"
+
 echo "✅ Successfully built: ${BUNDLE_DIR}"
+echo "✅ Successfully packaged: ${ZIP_PATH}"

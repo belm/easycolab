@@ -4,14 +4,49 @@
 .LSOverride
 ._*
 
-# Compiled macOS & Windows Application Bundles / Archives (publish via GitHub Releases)
+# Private Local iOS & Android Signing Credentials / Internal Notes (NEVER commit)
+/ios_app/APP_STORE_SUBMISSION_GUIDE.md
+/ios_app/archive_appstore_ios.sh
+LocalSigning.xcconfig
+**/LocalSigning.xcconfig
+*.xcconfig
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+*.certSigningRequest
+AuthKey_*.p8
+android_app/.signing/
+**/.signing/
+**/keystore.properties
+*.jks
+*.keystore
+
+# Compiled macOS, Windows, iOS & Android Application Bundles / Archives (publish via GitHub Releases)
 *.app/
+*.ipa
+*.xcarchive/
+*.apk
+*.aab
 *.dmg
 *.zip
 *.pkg
 *.exe
 build/
+**/build/
 dist/
+Payload/
+*.xcodeproj/project.xcworkspace/
+**/xcuserdata/
+xcuserdata/
+DerivedData/
+.gradle/
+**/.gradle/
+.kotlin/
+**/.kotlin/
+**/local.properties
+.idea/
+*.iml
 
 # Python Virtual Environments & Bytecode
 .venv/

@@ -2,7 +2,7 @@
 
 **简体中文** | [English](./README_EN.md)
 
-**EasyColab** 是一款专为 **macOS 与 Windows** 原生打造的 Google Colab 云端大显存多模态 AI 创作工作台（macOS SwiftUI 原生客户端 + Windows PySide6/Qt6 桌面客户端 + 云端多模型加速引擎）。
+**EasyColab** 是一款专为 **macOS、Windows、iOS / iPadOS 与 Android** 原生打造的 Google Colab 云端大显存多模态 AI 创作工作台（macOS SwiftUI 原生客户端 + Windows PySide6/Qt6 桌面客户端 + iOS/iPadOS 纯 SwiftUI 原生客户端 + Android 纯 Kotlin Jetpack Compose 原生客户端 + 云端多模型加速引擎）。
 
 默认适配 **Google Colab G4（NVIDIA RTX PRO 6000 Blackwell · `96 GB` 显存 + `176 GB` 系统内存）** 以及 `H100 / A100 / L4` 实例，支持免开网页一键唤醒部署、Google Drive 云盘权重永久复用、多模型显存共驻、实时算力折线图监控、中英文双语界面一键切换与闲置自动释放省额度。
 
@@ -39,6 +39,8 @@
 - **操作系统**：
   - **macOS**：macOS 13.0 (Ventura) 或更高版本（推荐 Apple Silicon / macOS Sonoma & Sequoia）
   - **Windows**：Windows 10 (1903+) 或 Windows 11 64 位 (x64)
+  - **iOS / iPadOS**：iOS 16.0 或更高版本（支持 Mac 本地源码真机签名安装或通过 AltStore / SideStore / Sideloadly / TrollStore 侧载 `.ipa`）
+  - **Android**：Android 8.0 (API 26) 或更高版本（支持从 GitHub Releases 下载签名 `.apk` 直接安装，或从 `android_app/` 源码一键编译）
 - **云端账号**：开通了 **Google Colab Pro / Pro+ / Google AI Ultra**（拥有可用 CU 计算单元）的 Google 账号；免费版用户请使用下方「Google Colab 官方网页端运行 `.ipynb`」。
 
 ---
@@ -102,6 +104,54 @@ python -m venv .venv
 # macOS:   source .venv/bin/activate
 pip install -r windows_app/requirements-windows.txt
 python windows_app/easycolab_win.py
+```
+
+---
+
+### iOS / iPadOS 客户端（开源源码自编译 & 侧载 `.ipa`）
+
+iOS / iPadOS 端采用纯原生 SwiftUI 构建（源码位于 [`ios_app/`](./ios_app)），内置零 Python 依赖的纯 Swift 云端唤醒桥接引擎，支持一键 Google OAuth 授权唤醒 G4 (96GB) 实例、锁屏/切后台推理进度自动同步、高清有声 MP4 与 PNG 自动存入系统相册、自定义 HuggingFace 仓库导入以及云端闲置自动休眠保护。
+
+#### 方式一：Mac 本地一行命令编译并安装至 iPhone / iPad 真机（推荐）
+支持**免费个人 Apple ID**（7 天自签）或付费 Apple Developer 账号（365 天签名）。将 iPhone / iPad 连接至安装了 Xcode 的 Mac（首次连接请在设备上开启「开发者模式」并信任电脑）：
+
+```bash
+# 自动生成临时隔离工程（位于被 Git 忽略的 build/ 目录，绝不写入或泄露你的 Team ID）并直装真机
+bash ios_app/install_release_iphone.sh
+
+# 或者在 Xcode 图形界面打开工程手动选择个人签名团队运行：
+bash ios_app/install_release_iphone.sh --open-xcode
+```
+
+#### 方式二：通过侧载工具安装预编译 `EasyColab-iOS.ipa`
+1. 从 **[GitHub Releases](../../releases)** 下载 `EasyColab-iOS.ipa`（或在 Mac 本地执行 `bash ios_app/build_ios_ipa.sh` 生成无开发者签名信息的纯净 `EasyColab-iOS.ipa`）。
+2. 使用 **AltStore**、**SideStore**、**Sideloadly** 或 **TrollStore** 导入 `EasyColab-iOS.ipa` 自签安装即可。
+
+#### 方式三：macOS 本地一键启动 iOS 模拟器预览
+
+```bash
+bash ios_app/run_ios_simulator.sh
+```
+
+---
+
+### Android 客户端（独立安装包 `.apk` & 开源自编译）
+
+Android 端采用纯原生 Kotlin + Jetpack Compose Material 3 构建（源码位于 [`android_app/`](./android_app)），内置零 Python 依赖的纯 Kotlin 云端唤醒与 Jupyter WebSocket 桥接引擎，支持一键 Google OAuth 授权跳回、免网页唤醒云端 G4 (96GB) 实例、高清有声 MP4 与 PNG 自动写入系统相册（`Movies/EasyColab` 与 `Pictures/EasyColab`）以及锁屏/切后台断点恢复。
+
+#### 方式一：直接下载预编译 `.apk` 安装（推荐）
+1. 前往本仓库 **[GitHub Releases](../../releases)** 页面下载最新签名安装包 **`EasyColab-Android.apk`**。
+2. 在 Android 手机或平板（Android 8.0+）上直接点击安装即可使用。
+
+#### 方式二：从源码本地一键编译签名 `.apk` 或直装手机
+确保本机装有 JDK 17+ 与 Android SDK（如已安装 Android Studio 则自动识别，首次构建若无签名密钥会自动在被 Git 忽略的 `android_app/.signing/` 下生成本地证书）：
+
+```bash
+# 仅编译生成根目录 EasyColab-Android.apk
+bash android_app/build_android_apk.sh
+
+# 编译并通过 ADB 一键安装启动至已连接 USB / 无线调试的 Android 手机
+bash android_app/install_release_android.sh
 ```
 
 ---

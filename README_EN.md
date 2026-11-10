@@ -2,7 +2,7 @@
 
 [简体中文](./README.md) | **English**
 
-**EasyColab** is a native desktop Multimodal AI Studio built for **macOS and Windows**, powered by Google Colab high-VRAM cloud GPUs (macOS native SwiftUI client + Windows PySide6/Qt6 desktop client + cloud multi-model acceleration engine).
+**EasyColab** is a native Multimodal AI Studio built for **macOS, Windows, iOS / iPadOS, and Android**, powered by Google Colab high-VRAM cloud GPUs (macOS native SwiftUI client + Windows PySide6/Qt6 desktop client + iOS/iPadOS pure SwiftUI client + Android pure Kotlin Jetpack Compose client + cloud multi-model acceleration engine).
 
 Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` · `96 GB` VRAM + `176 GB` System RAM)** as well as `H100 / A100 / L4` runtimes, EasyColab supports headless one-click runtime wake & deployment, persistent model caching on Google Drive, multi-model VRAM co-residency, real-time spline telemetry charts, instant Chinese/English UI switching, and automatic idle runtime release to save Compute Units.
 
@@ -39,6 +39,8 @@ Optimized out of the box for **Google Colab G4 (`NVIDIA RTX PRO 6000 Blackwell` 
 - **Operating System**:
   - **macOS**: macOS 13.0 (Ventura) or later (Apple Silicon / macOS Sonoma & Sequoia recommended)
   - **Windows**: Windows 10 (1903+) or Windows 11 64-bit (x64)
+  - **iOS / iPadOS**: iOS 16.0 or later (build & sign locally from open-source `ios_app/` via Xcode, or sideload `.ipa` via AltStore / SideStore / Sideloadly / TrollStore)
+  - **Android**: Android 8.0 (API 26) or later (direct signed `.apk` via GitHub Releases, or build from open-source `android_app/`)
 - **Cloud Account**: A Google account subscribed to **Google Colab Pro / Pro+ / Google AI Ultra** with available Compute Units (CU). Free-tier users should follow the *"Run via Official Google Colab Web UI"* section below.
 
 ---
@@ -95,6 +97,54 @@ python -m venv .venv
 # macOS:   source .venv/bin/activate
 pip install -r windows_app/requirements-windows.txt
 python windows_app/easycolab_win.py
+```
+
+---
+
+### iOS / iPadOS Client (Open-Source Build & Sideload `.ipa`)
+
+Crafted natively in pure SwiftUI for iPhone and iPad (source code in [`ios_app/`](./ios_app)) with a zero-Python pure-Swift Colab provisioning bridge, supporting 1-tap Google OAuth & headless G4 (96GB) wake, background/lock-screen job recovery, automatic MP4/PNG export to Photos, custom HuggingFace repo import, and cloud idle auto-sleep protection.
+
+#### Option 1: One-Command Local Build & Install to iPhone / iPad (Recommended)
+Works with both a **free personal Apple ID** (7-day Xcode signing) and a paid Apple Developer account (365-day signing). Connect your iPhone or iPad to a Mac with Xcode installed:
+
+```bash
+# Generates an isolated Xcode project inside git-ignored build/ (never writes your Team ID to tracked files) & installs Release build
+bash ios_app/install_release_iphone.sh
+
+# Or open the generated project in Xcode GUI to select your Personal Team manually:
+bash ios_app/install_release_iphone.sh --open-xcode
+```
+
+#### Option 2: Sideload Prebuilt `EasyColab-iOS.ipa`
+1. Download `EasyColab-iOS.ipa` from **[GitHub Releases](../../releases)** (or build it locally on macOS via `bash ios_app/build_ios_ipa.sh`, which outputs an ad-hoc unsigned `.ipa` with zero personal Team ID).
+2. Sideload `EasyColab-iOS.ipa` onto your iPhone or iPad using **AltStore**, **SideStore**, **Sideloadly**, or **TrollStore**.
+
+#### Option 3: Launch Directly in iOS Simulator on macOS
+
+```bash
+bash ios_app/run_ios_simulator.sh
+```
+
+---
+
+### Android Client (Standalone Signed `.apk` & Open-Source Build)
+
+Built natively in pure Kotlin + Jetpack Compose Material 3 (source code in [`android_app/`](./android_app)) with a zero-Python pure-Kotlin Colab provisioning & Jupyter WebSocket bridge, supporting 1-tap Google OAuth2 sign-in, headless G4 (96GB) wake, automatic MP4/PNG export to Android System Gallery (`Movies/EasyColab` & `Pictures/EasyColab`), and background/screen-lock job recovery.
+
+#### Option 1: Download Prebuilt Signed `.apk` (Recommended)
+1. Visit **[GitHub Releases](../../releases)** and download the latest signed **`EasyColab-Android.apk`**.
+2. Open `EasyColab-Android.apk` on your Android phone or tablet (Android 8.0+) to install directly.
+
+#### Option 2: Build & Install Locally from Source
+With JDK 17+ and Android SDK installed (auto-detected if Android Studio is installed; automatically generates a local signing key inside git-ignored `android_app/.signing/` if none exists):
+
+```bash
+# Build standalone signed EasyColab-Android.apk in repo root
+bash android_app/build_android_apk.sh
+
+# Or build, install & launch directly on a connected ADB Android device
+bash android_app/install_release_android.sh
 ```
 
 ---

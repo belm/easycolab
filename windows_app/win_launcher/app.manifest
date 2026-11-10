@@ -3,7 +3,7 @@
   <assemblyIdentity
     type="win32"
     name="EasyColab.Studio.Desktop"
-    version="1.0.0.0"
+    version="1.1.0.0"
     processorArchitecture="amd64"
   />
   <description>EasyColab Cloud GPU Multimodal AI Studio</description>

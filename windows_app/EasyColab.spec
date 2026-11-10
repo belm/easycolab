@@ -6,15 +6,70 @@ google-colab-cli OAuth config, app.py, and EasyColab_Server.ipynb into a standal
 distribution requiring ZERO Python installation on user machines.
 """
 import os
+import re
+import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 SPEC_DIR = Path(SPECPATH).resolve()
 PROJECT_ROOT = SPEC_DIR.parent
 ICON_PATH = SPEC_DIR / "assets" / "AppIcon.ico"
+VERSION_FILE = PROJECT_ROOT / "VERSION"
+APP_VERSION = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.is_file() else "1.1.0"
+_ver_nums = [int(x) for x in re.findall(r"\d+", APP_VERSION)[:4]]
+while len(_ver_nums) < 4:
+    _ver_nums.append(0)
+APP_VERSION_QUAD = tuple(_ver_nums[:4])
+
+win_version_info = None
+if sys.platform == "win32":
+    try:
+        from PyInstaller.utils.win32.versioninfo import (
+            FixedFileInfo,
+            StringFileInfo,
+            StringStruct,
+            StringTable,
+            VarFileInfo,
+            VarStruct,
+            VSVersionInfo,
+        )
+
+        win_version_info = VSVersionInfo(
+            ffi=FixedFileInfo(
+                filevers=APP_VERSION_QUAD,
+                prodvers=APP_VERSION_QUAD,
+                mask=0x3F,
+                flags=0x0,
+                OS=0x40004,
+                fileType=0x1,
+                subtype=0x0,
+                date=(0, 0),
+            ),
+            kids=[
+                StringFileInfo(
+                    [
+                        StringTable(
+                            "040904B0",
+                            [
+                                StringStruct("CompanyName", "EasyColab Open Source"),
+                                StringStruct("FileDescription", "EasyColab AI Studio"),
+                                StringStruct("FileVersion", ".".join(str(n) for n in APP_VERSION_QUAD)),
+                                StringStruct("InternalName", "EasyColab"),
+                                StringStruct("OriginalFilename", "EasyColab.exe"),
+                                StringStruct("ProductName", "EasyColab"),
+                                StringStruct("ProductVersion", APP_VERSION),
+                            ],
+                        )
+                    ]
+                ),
+                VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+            ],
+        )
+    except Exception:
+        win_version_info = None
 
 datas = []
-for res_name in ("app.py", "colab_bridge.py", "EasyColab_Server.ipynb", "requirements.txt"):
+for res_name in ("VERSION", "app.py", "colab_bridge.py", "EasyColab_Server.ipynb", "requirements.txt"):
     src = PROJECT_ROOT / res_name
     if src.exists():
         datas.append((str(src), "."))
@@ -98,6 +153,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
+    version=win_version_info,
 )
 
 coll = COLLECT(

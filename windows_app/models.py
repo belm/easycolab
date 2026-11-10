@@ -326,6 +326,8 @@ class OpenModelSpec:
     default_steps: int
     modes: List[TaskModeItem]
     default_files: List[ModelFileItem]
+    include_pattern: str = ""
+    is_custom: bool = False
 
     @property
     def name(self) -> str:
@@ -338,6 +340,112 @@ class OpenModelSpec:
     @property
     def summary(self) -> str:
         return tr(self.summary_zh, self.summary_en)
+
+    @classmethod
+    def from_custom_dict(cls, d: dict) -> "OpenModelSpec":
+        mod_raw = str(d.get("modality") or "llm_vlm")
+        if mod_raw == "video_audio":
+            mod = ModelModality.VIDEO_AUDIO
+            icon = "film.stack"
+            steps = 35
+            modes = [
+                TaskModeItem(
+                    id="t2va",
+                    title_zh="文生音视频",
+                    title_en="Text to Video+Audio",
+                    subtitle_zh="输入镜头与声音描述，同步生成视频与立体声音轨",
+                    subtitle_en="Describe visuals and sound to generate video with synced stereo audio",
+                    icon="film",
+                ),
+                TaskModeItem(
+                    id="fl2va",
+                    title_zh="首尾帧生视频",
+                    title_en="First/Last Frame to Video",
+                    subtitle_zh="上传首帧或尾帧参考图，精准控制起止画面与运镜过渡",
+                    subtitle_en="Upload start/end reference frames for precise composition & camera transitions",
+                    icon="photo.on.rectangle.angled",
+                ),
+            ]
+        elif mod_raw == "image":
+            mod = ModelModality.IMAGE
+            icon = "sparkles.rectangle.stack"
+            steps = 20
+            modes = [
+                TaskModeItem(
+                    id="t2i",
+                    title_zh="高清文生图",
+                    title_en="HD Text-to-Image",
+                    subtitle_zh="自定义 HuggingFace 图像生成管线",
+                    subtitle_en="Custom HuggingFace image generation pipeline",
+                    icon="photo.artframe",
+                ),
+                TaskModeItem(
+                    id="i2i_edit",
+                    title_zh="图生图风格重绘",
+                    title_en="Image-to-Image Restyle",
+                    subtitle_zh="上传参考底图并调节重绘幅度，保留构图生成全新细节",
+                    subtitle_en="Upload a reference image and adjust denoising strength to restyle",
+                    icon="wand.and.rays",
+                ),
+            ]
+        else:
+            mod = ModelModality.LLM_VLM
+            icon = "shippingbox.fill"
+            steps = 20
+            modes = [
+                TaskModeItem(
+                    id="chat",
+                    title_zh="深度推理对话",
+                    title_en="Deep Reasoning Chat",
+                    subtitle_zh="自定义 HuggingFace 模型对话、长思维链推理与代码创作",
+                    subtitle_en="Custom HuggingFace model chat, CoT reasoning & coding",
+                    icon="bubble.left.and.bubble.right",
+                ),
+                TaskModeItem(
+                    id="vlm",
+                    title_zh="图像视觉理解",
+                    title_en="Vision Understanding",
+                    subtitle_zh="拖入图片进行画面解析、OCR 识别或反推提示词",
+                    subtitle_en="Drop images for scene analysis, OCR, or prompt reverse-engineering",
+                    icon="eye",
+                ),
+                TaskModeItem(
+                    id="api",
+                    title_zh="API 协议网关",
+                    title_en="API Protocol Gateway",
+                    subtitle_zh="提供 OpenAI (/v1) 与 Anthropic (/v1/messages) 双协议公网接口",
+                    subtitle_en="Public dual-protocol gateway compatible with OpenAI (/v1) & Anthropic (/v1/messages)",
+                    icon="network",
+                ),
+            ]
+        repo_id = str(d.get("repo_id") or "")
+        name = str(d.get("name") or repo_id.split("/")[-1] or "Custom Model")
+        size_gb = float(d.get("approx_size_gb") or 0.0)
+        arch = str(d.get("pipeline_arch") or "gguf").upper()
+        inc = str(d.get("include_pattern") or "")
+        badge_zh = f"自定义 {arch} · {size_gb:.1f} GB" if size_gb > 0 else f"自定义 HF · {arch}"
+        badge_en = f"Custom {arch} · {size_gb:.1f} GB" if size_gb > 0 else f"Custom HF · {arch}"
+        pat_desc = f" ({inc})" if inc else ""
+        summary_zh = str(d.get("category") or f"自定义 HuggingFace 仓库 {repo_id}{pat_desc}")
+        summary_en = f"Custom HuggingFace repo {repo_id}{pat_desc}"
+        return cls(
+            id=str(d.get("id") or f"custom_{uuid.uuid4().hex[:8]}"),
+            name_zh=name,
+            name_en=name,
+            repo_id=repo_id,
+            badge_zh=badge_zh,
+            badge_en=badge_en,
+            summary_zh=summary_zh,
+            summary_en=summary_en,
+            approx_size_gb=size_gb,
+            icon=icon,
+            modality=mod,
+            default_steps=steps,
+            modes=modes,
+            default_files=[],
+            include_pattern=inc,
+            is_custom=True,
+        )
 
 
 @dataclass(frozen=True)
