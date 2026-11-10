@@ -974,31 +974,35 @@ extension StudioViewModel {
                 let (data, _) = try await URLSession.shared.data(for: req)
                 let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
                 if decoded.action_ok == false {
-                    customModelErrorMessage = decoded.action_message ?? L("无法解析该 HuggingFace 仓库", "Failed to resolve HuggingFace repository")
+                    let srvMsg = decoded.action_message ?? ""
+                    if !srvMsg.contains("all_rfilenames") {
+                        customModelErrorMessage = srvMsg.isEmpty ? L("无法解析该 HuggingFace 仓库", "Failed to resolve HuggingFace repository") : srvMsg
+                        return
+                    }
+                } else {
+                    applyStatusResponse(decoded)
+                    if let reg = decoded.registered_model {
+                        let spec = OpenModelSpec.fromCustomDTO(reg)
+                        if let idx = customModels.firstIndex(where: { $0.id == spec.id }) {
+                            customModels[idx] = spec
+                        } else {
+                            customModels.append(spec)
+                        }
+                        savePersistedCustomModels()
+                        switchSelectedModel(spec)
+                    }
+                    if let am = decoded.action_message, !am.isEmpty {
+                        statusMessage = am
+                    }
+                    showAddCustomModelSheet = false
+                    customRepoInput = ""
+                    customIncludePatternInput = ""
+                    customDisplayNameInput = ""
+                    if autoDownload {
+                        await startRemoteDownloadWeights()
+                    }
                     return
                 }
-                applyStatusResponse(decoded)
-                if let reg = decoded.registered_model {
-                    let spec = OpenModelSpec.fromCustomDTO(reg)
-                    if let idx = customModels.firstIndex(where: { $0.id == spec.id }) {
-                        customModels[idx] = spec
-                    } else {
-                        customModels.append(spec)
-                    }
-                    savePersistedCustomModels()
-                    switchSelectedModel(spec)
-                }
-                if let am = decoded.action_message, !am.isEmpty {
-                    statusMessage = am
-                }
-                showAddCustomModelSheet = false
-                customRepoInput = ""
-                customIncludePatternInput = ""
-                customDisplayNameInput = ""
-                if autoDownload {
-                    await startRemoteDownloadWeights()
-                }
-                return
             } catch {
                 // 若远端旧版或网络波动，回退为本地先注册
             }

@@ -105,6 +105,12 @@ python windows_app/easycolab_win.py
 
 Crafted natively in pure SwiftUI for iPhone and iPad (source code in [`ios_app/`](./ios_app)) with a zero-Python pure-Swift Colab provisioning bridge, supporting 1-tap Google OAuth & headless G4 (96GB) wake, background/lock-screen job recovery, automatic MP4/PNG export to Photos, custom HuggingFace repo import, and cloud idle auto-sleep protection.
 
+<p align="center">
+  <img src="./app_1.PNG" alt="EasyColab Mobile Studio & 1-Tap ComfyUI Workflow Packs" width="45%" />
+  &nbsp;&nbsp;&nbsp;
+  <img src="./app_2.PNG" alt="EasyColab Mobile Cloud GPU Center & 1-Tap G4 Wake" width="45%" />
+</p>
+
 #### Option 1: One-Command Local Build & Install to iPhone / iPad (Recommended)
 Works with both a **free personal Apple ID** (7-day Xcode signing) and a paid Apple Developer account (365-day signing). Connect your iPhone or iPad to a Mac with Xcode installed:
 

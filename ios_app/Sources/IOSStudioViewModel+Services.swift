@@ -451,13 +451,15 @@ extension IOSStudioViewModel {
                         }
                         return
                     } else {
-                        customModelBannerMessage = localizeServerText(decoded.action_message ?? L("仓库解析失败，请检查 Repo ID 是否正确", "Failed to inspect repo, please check Repo ID"))
-                        return
+                        let srvMsg = decoded.action_message ?? ""
+                        if !srvMsg.contains("all_rfilenames") {
+                            customModelBannerMessage = localizeServerText(srvMsg.isEmpty ? L("仓库解析失败，请检查 Repo ID 是否正确", "Failed to inspect repo, please check Repo ID") : srvMsg)
+                            return
+                        }
                     }
                 }
             } catch {
-                customModelBannerMessage = L("云端解析请求异常: \(error.localizedDescription)", "Cloud request error: \(error.localizedDescription)")
-                return
+                // 网络抖动或远端异常时回退至本地模型中心注册
             }
         }
 
@@ -638,7 +640,13 @@ extension IOSStudioViewModel {
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: ["model_id": targetModel, "hf_token": hfToken])
+            req.httpBody = try JSONSerialization.data(withJSONObject: [
+                "model_id": targetModel,
+                "hf_token": hfToken,
+                "repo_id": activeModelSpec.isCustom ? activeModelSpec.repoId : "",
+                "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
+                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
+            ])
             let (data, _) = try await URLSession.shared.data(for: req)
             applyStatusResponse(try JSONDecoder().decode(ColabStatusResponse.self, from: data))
             while isDownloadingWeights {
@@ -681,7 +689,10 @@ extension IOSStudioViewModel {
                 "precision_mode": "bf16",
                 "offload_mode": selectedOffload,
                 "context_length": contextLengthTokens,
-                "hf_token": hfToken
+                "hf_token": hfToken,
+                "repo_id": activeModelSpec.isCustom ? activeModelSpec.repoId : "",
+                "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
+                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
             ])
             let (data, _) = try await URLSession.shared.data(for: req)
             applyStatusResponse(try JSONDecoder().decode(ColabStatusResponse.self, from: data))

@@ -1195,7 +1195,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             modelTaskProgress = 0.05f
             statusMessage = L("正在启动云端 8 线程高速下载 ${activeModelSpec.name}...", "Starting 8-thread cloud download for ${activeModelSpec.name}...")
             try {
-                val payload = JSONObject().put("model_id", targetModel).put("hf_token", hfToken)
+                val curSpec = activeModelSpec
+                val payload = JSONObject()
+                    .put("model_id", targetModel)
+                    .put("hf_token", hfToken)
+                    .put("repo_id", if (curSpec.isCustom) curSpec.repoId else "")
+                    .put("include_pattern", if (curSpec.isCustom) curSpec.includePattern else "")
+                    .put("custom_name", if (curSpec.isCustom) curSpec.nameZh else "")
                 postJsonForStatus("$base/minimax_api/download_model", payload)?.let(::applyStatusJson)
                 while (isDownloadingWeights && isActive) {
                     delay(1500)
@@ -1238,12 +1244,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             modelTaskProgress = 0.15f
             statusMessage = L("正在装载 ${activeModelSpec.name} 至云端 GPU 显存...", "Loading ${activeModelSpec.name} into cloud GPU VRAM...")
             try {
+                val curSpec = activeModelSpec
                 val payload = JSONObject()
                     .put("model_id", targetModel)
                     .put("precision_mode", "bf16")
                     .put("offload_mode", selectedOffload)
                     .put("context_length", contextLengthTokens)
                     .put("hf_token", hfToken)
+                    .put("repo_id", if (curSpec.isCustom) curSpec.repoId else "")
+                    .put("include_pattern", if (curSpec.isCustom) curSpec.includePattern else "")
+                    .put("custom_name", if (curSpec.isCustom) curSpec.nameZh else "")
                 postJsonForStatus("$base/minimax_api/load_model", payload)?.let(::applyStatusJson)
                 while (isLoadingModel && isActive) {
                     delay(1500)

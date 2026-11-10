@@ -2096,10 +2096,12 @@ def inspect_and_resolve_hf_repo(
 
     siblings = meta.get("siblings") or []
     file_entries: List[Tuple[str, int]] = []
+    all_rfilenames: List[str] = []
     for s in siblings:
         rfn = str(s.get("rfilename") or "").strip()
         if not rfn:
             continue
+        all_rfilenames.append(rfn.lower())
         sz = int(s.get("size") or (s.get("lfs") or {}).get("size") or 0)
         file_entries.append((rfn, sz))
 
@@ -6604,11 +6606,20 @@ def disconnect_colab_runtime() -> str:
 # ==============================================================================
 class SelectModelRequest(BaseModel):
     model_id: str = "minimax_h3"
+    repo_id: str = ""
+    include_pattern: str = ""
+    custom_name: str = ""
+    modality: str = "auto"
+    hf_token: str = ""
 
 
 class DownloadModelRequest(BaseModel):
     model_id: Optional[str] = None
     hf_token: str = ""
+    repo_id: str = ""
+    include_pattern: str = ""
+    custom_name: str = ""
+    modality: str = "auto"
 
 
 class LoadModelRequest(BaseModel):
@@ -6617,6 +6628,10 @@ class LoadModelRequest(BaseModel):
     offload_mode: str = "disk"
     hf_token: str = ""
     context_length: Optional[int] = None
+    repo_id: str = ""
+    include_pattern: str = ""
+    custom_name: str = ""
+    modality: str = "auto"
 
 
 class ContextConfigRequest(BaseModel):
@@ -8224,6 +8239,15 @@ def attach_macos_api_routes(app: FastAPI):
     @app.post("/minimax_api/select_model")
     def api_select_model(req: SelectModelRequest):
         touch_activity()
+        if req.model_id and req.model_id not in MODEL_CATALOG and req.repo_id:
+            register_custom_hf_model_core(
+                repo_id=req.repo_id,
+                custom_name=req.custom_name,
+                include_pattern=req.include_pattern,
+                modality=req.modality or "auto",
+                hf_token=req.hf_token,
+                model_id_override=req.model_id,
+            )
         return get_gpu_status_dict(model_id=req.model_id)
 
     @app.post("/minimax_api/config_idle")
@@ -8940,6 +8964,15 @@ def attach_macos_api_routes(app: FastAPI):
     @app.post("/minimax_api/download_model")
     def api_download_model(req: DownloadModelRequest):
         touch_activity()
+        if req.model_id and req.model_id not in MODEL_CATALOG and req.repo_id:
+            register_custom_hf_model_core(
+                repo_id=req.repo_id,
+                custom_name=req.custom_name,
+                include_pattern=req.include_pattern,
+                modality=req.modality or "auto",
+                hf_token=req.hf_token,
+                model_id_override=req.model_id,
+            )
         target_id = req.model_id if (req.model_id and req.model_id in MODEL_CATALOG) else SELECTED_MODEL_ID
         if not MODEL_DOWNLOAD_STATE["is_downloading"]:
             t = threading.Thread(
@@ -8956,6 +8989,15 @@ def attach_macos_api_routes(app: FastAPI):
         touch_activity()
         if req.context_length is not None:
             QWEN_CONTEXT_LENGTH = _clamp_context_length(req.context_length)
+        if req.model_id and req.model_id not in MODEL_CATALOG and req.repo_id:
+            register_custom_hf_model_core(
+                repo_id=req.repo_id,
+                custom_name=req.custom_name,
+                include_pattern=req.include_pattern,
+                modality=req.modality or "auto",
+                hf_token=req.hf_token,
+                model_id_override=req.model_id,
+            )
         target_id = req.model_id if (req.model_id and req.model_id in MODEL_CATALOG) else SELECTED_MODEL_ID
         if not MODEL_DOWNLOAD_STATE["is_loading_vram"]:
             t = threading.Thread(

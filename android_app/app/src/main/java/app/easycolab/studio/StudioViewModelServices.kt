@@ -436,28 +436,32 @@ fun StudioViewModel.registerCustomHFModel(autoDownload: Boolean = false) {
                 val json = postJsonForStatus("$base/minimax_api/custom_model/register", body, timeoutSec = 35L)
                 if (json != null) {
                     if (json.optBoolean("action_ok", true) == false) {
+                        val srvMsg = json.optString("action_message", "")
+                        if (!srvMsg.contains("all_rfilenames")) {
+                            isRegisteringCustomModel = false
+                            customModelErrorMessage = srvMsg.ifEmpty { L("解析 HuggingFace 仓库失败", "Failed to resolve HuggingFace repo") }
+                            return@launch
+                        }
+                    } else {
+                        applyStatusJson(json)
+                        json.optJSONObject("registered_model")?.let { reg ->
+                            val spec = OpenModelSpec.fromCustomJson(reg)
+                            val updated = customModels.toMutableList()
+                            val idx = updated.indexOfFirst { it.id == spec.id }
+                            if (idx >= 0) updated[idx] = spec else updated.add(spec)
+                            customModels = updated
+                            savePersistedCustomModels()
+                            switchSelectedModel(spec)
+                        }
+                        json.optStringOrNull("action_message")?.takeIf { it.isNotEmpty() }?.let { statusMessage = stripEmoji(it) }
                         isRegisteringCustomModel = false
-                        customModelErrorMessage = json.optString("action_message", L("解析 HuggingFace 仓库失败", "Failed to resolve HuggingFace repo"))
+                        showAddCustomModelDialog = false
+                        customRepoInput = ""
+                        customIncludePatternInput = ""
+                        customDisplayNameInput = ""
+                        if (autoDownload) startRemoteDownloadWeights()
                         return@launch
                     }
-                    applyStatusJson(json)
-                    json.optJSONObject("registered_model")?.let { reg ->
-                        val spec = OpenModelSpec.fromCustomJson(reg)
-                        val updated = customModels.toMutableList()
-                        val idx = updated.indexOfFirst { it.id == spec.id }
-                        if (idx >= 0) updated[idx] = spec else updated.add(spec)
-                        customModels = updated
-                        savePersistedCustomModels()
-                        switchSelectedModel(spec)
-                    }
-                    json.optStringOrNull("action_message")?.takeIf { it.isNotEmpty() }?.let { statusMessage = stripEmoji(it) }
-                    isRegisteringCustomModel = false
-                    showAddCustomModelDialog = false
-                    customRepoInput = ""
-                    customIncludePatternInput = ""
-                    customDisplayNameInput = ""
-                    if (autoDownload) startRemoteDownloadWeights()
-                    return@launch
                 }
             } catch (_: Exception) {
             }

@@ -112,6 +112,12 @@ python windows_app/easycolab_win.py
 
 iOS / iPadOS 端采用纯原生 SwiftUI 构建（源码位于 [`ios_app/`](./ios_app)），内置零 Python 依赖的纯 Swift 云端唤醒桥接引擎，支持一键 Google OAuth 授权唤醒 G4 (96GB) 实例、锁屏/切后台推理进度自动同步、高清有声 MP4 与 PNG 自动存入系统相册、自定义 HuggingFace 仓库导入以及云端闲置自动休眠保护。
 
+<p align="center">
+  <img src="./app_1.PNG" alt="EasyColab 移动端创作工作台与 ComfyUI 预设工作流包" width="45%" />
+  &nbsp;&nbsp;&nbsp;
+  <img src="./app_2.PNG" alt="EasyColab 移动端云算力中心与 G4 一键唤醒" width="45%" />
+</p>
+
 #### 方式一：Mac 本地一行命令编译并安装至 iPhone / iPad 真机（推荐）
 支持**免费个人 Apple ID**（7 天自签）或付费 Apple Developer 账号（365 天签名）。将 iPhone / iPad 连接至安装了 Xcode 的 Mac（首次连接请在设备上开启「开发者模式」并信任电脑）：
 

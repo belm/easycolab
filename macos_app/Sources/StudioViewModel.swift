@@ -864,7 +864,10 @@ class StudioViewModel: ObservableObject {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: [
                 "model_id": targetModel,
-                "hf_token": hfToken
+                "hf_token": hfToken,
+                "repo_id": activeModelSpec.isCustom ? activeModelSpec.repoId : "",
+                "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
+                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
             ])
             let (data, _) = try await URLSession.shared.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
@@ -931,7 +934,10 @@ class StudioViewModel: ObservableObject {
                 "precision_mode": "bf16",
                 "offload_mode": selectedOffload,
                 "context_length": contextLengthTokens,
-                "hf_token": hfToken
+                "hf_token": hfToken,
+                "repo_id": activeModelSpec.isCustom ? activeModelSpec.repoId : "",
+                "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
+                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
             ]
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
