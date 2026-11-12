@@ -7,6 +7,8 @@ import ast
 import io
 import json
 import os
+import shutil
+import tempfile
 import typing
 import unittest
 
@@ -39,6 +41,7 @@ def _load_helpers(*names):
         "Optional": typing.Optional,
         "Dict": typing.Dict,
         "List": typing.List,
+        "Any": typing.Any,
         "os": os,
         "json": json,
         "shutil": __import__("shutil"),
@@ -142,6 +145,71 @@ class MiniMaxH3ImageHelpersTest(unittest.TestCase):
         )
         self.assertEqual(out["prompt"], "a cat")
         self.assertEqual(out["image"], ["ref"])
+
+
+    def test_cleanup_endpoints_and_ui_exist(self):
+        src = _read("app.py")
+        self.assertIn("/minimax_api/orphan_weights", src)
+        self.assertIn("/minimax_api/cleanup_weights", src)
+        self.assertIn("_scan_orphan_weight_files", src)
+        swift = _read("macos_app/Sources/MainStudioView.swift")
+        self.assertIn("previewOrphanWeights", swift)
+        self.assertIn("cleanupOrphanWeights", swift)
+
+
+class OrphanWeightsScanTest(unittest.TestCase):
+    """清理扫描必须只挑出清单外的权重，绝不碰清单内权重与配置文件"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="easycolab_orphan_test_")
+        cls.root = os.path.join(cls.tmp, "models", "Fake", "Repo")
+        for rel, size in (
+            ("keep/required.safetensors", 2048),
+            ("old/stale-1.safetensors", 8 * 1024 * 1024),
+            ("old/stale-2.bin", 4 * 1024 * 1024),
+            ("config.json", 128),
+        ):
+            p = os.path.join(cls.root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with io.open(p, "wb") as f:
+                f.write(b"x" * size)
+        cls.ns = _load_helpers("_scan_orphan_weight_files", "_orphan_weight_groups")
+        cls.ns.update({
+            "os": os,
+            "shutil": shutil,
+            "Dict": typing.Dict,
+            "List": typing.List,
+            "Any": typing.Any,
+            "MODEL_CATALOG": {"fake_model": {"files": [("keep/required.safetensors", "")]}},
+            "_get_model_dirs": lambda mid: (None, cls.root, cls.root),
+            "_ORPHAN_WEIGHT_EXTS": (".safetensors", ".bin", ".gguf", ".pt", ".pth", ".part", ".tmp"),
+        })
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_only_orphan_weights_are_listed(self):
+        items = self.ns["_scan_orphan_weight_files"]("fake_model")
+        rels = sorted(it["rel"] for it in items)
+        self.assertEqual(rels, ["old/stale-1.safetensors", "old/stale-2.bin"])
+        self.assertNotIn("keep/required.safetensors", rels)
+        self.assertNotIn("config.json", rels)
+
+    def test_groups_aggregate_by_directory(self):
+        summary = self.ns["_orphan_weight_groups"](
+            self.ns["_scan_orphan_weight_files"]("fake_model")
+        )
+        self.assertEqual(summary["file_count"], 2)
+        self.assertEqual(len(summary["groups"]), 1)
+        self.assertEqual(summary["groups"][0]["dir"], "old/")
+        self.assertEqual(summary["groups"][0]["file_count"], 2)
+        self.assertGreater(summary["total_size_gb"], 0)
+
+    def test_unknown_model_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.ns["_scan_orphan_weight_files"]("does_not_exist")
 
 
 if __name__ == "__main__":

@@ -1199,6 +1199,26 @@ struct MainStudioView: View {
                         .help(L("将当前模型从 GPU 显存中卸载释放", "Unload active model from GPU VRAM"))
                         .disabled(vm.isUnloadingModel)
                     }
+
+                    Button {
+                        Task { await vm.previewOrphanWeights() }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .controlSize(.regular)
+                    .help(L(
+                        "扫描并删除当前模型目录下不在权重清单中的旧权重（如 transformer/、vae/）",
+                        "Scan and delete stale weights not in the current manifest (e.g. transformer/, vae/)"
+                    ))
+                    .disabled(!vm.isConnected || vm.isDownloadingWeights || vm.isLoadingModel || vm.isUnloadingModel || vm.isCleaningWeights)
+                }
+                .alert(L("清理冗余权重？", "Delete Redundant Weights?"), isPresented: $vm.showCleanupConfirm) {
+                    Button(L("取消", "Cancel"), role: .cancel) {}
+                    Button(L("删除", "Delete"), role: .destructive) {
+                        Task { await vm.cleanupOrphanWeights() }
+                    }
+                } message: {
+                    Text(vm.cleanupSummary)
                 }
             }
         }

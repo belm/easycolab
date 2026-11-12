@@ -26,6 +26,35 @@ final class SameOriginAdminRedirect: NSObject, URLSessionTaskDelegate {
     }
 }
 
+// MARK: - 冗余权重清理（服务端响应模型）
+
+struct OrphanWeightGroup: Codable, Identifiable, Hashable {
+    var id: String { dir }
+    let dir: String
+    let file_count: Int
+    let size_gb: Double
+}
+
+struct OrphanWeightsResponse: Codable {
+    let ok: Bool?
+    let model_id: String?
+    let model_name: String?
+    let groups: [OrphanWeightGroup]?
+    let file_count: Int?
+    let total_size_gb: Double?
+    let disk_free_gb: Double?
+    let message: String?
+}
+
+struct CleanupWeightsResponse: Codable {
+    let ok: Bool?
+    let model_id: String?
+    let deleted_files: Int?
+    let freed_gb: Double?
+    let disk_free_gb: Double?
+    let message: String?
+}
+
 @MainActor
 class StudioViewModel: ObservableObject {
     var cachedBridgePythonBin: String? = nil
@@ -223,6 +252,11 @@ class StudioViewModel: ObservableObject {
     @Published var allDownloaded: Bool = false
     @Published var totalDiskSizeGB: Double = 0.0
     @Published var isDownloadingWeights: Bool = false
+    @Published var isCleaningWeights: Bool = false
+    @Published var orphanGroups: [OrphanWeightGroup] = []
+    @Published var orphanTotalGB: Double = 0.0
+    @Published var showCleanupConfirm: Bool = false
+    @Published var cleanupSummary: String = ""
     @Published var isLoadingModel: Bool = false
 
     // ComfyUI 云端工作台与 Google Drive 软链持久化状态
@@ -951,6 +985,90 @@ class StudioViewModel: ObservableObject {
                 "下载权重请求失败: \(error.localizedDescription)",
                 "Weight download request failed: \(error.localizedDescription)"
             )
+        }
+    }
+
+    /// 预览：列出云端模型目录里不在当前权重清单中的冗余文件（不删除）
+    func previewOrphanWeights() async {
+        let base = normalizedBaseURL
+        guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/orphan_weights") else {
+            statusMessage = L("请先连接有效的 Colab 服务端地址。", "Please connect to a valid Colab Server URL first.")
+            return
+        }
+        isCleaningWeights = true
+        defer { isCleaningWeights = false }
+        do {
+            var req = try adminRequest(url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["model_id": selectedModelId])
+            let (data, resp) = try await adminSession.data(for: req)
+            guard let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                statusMessage = L(
+                    "清理预览失败：云端服务端尚未支持该接口，请先点「唤醒并部署」更新服务端。",
+                    "Preview failed: the cloud server does not support this endpoint yet. Click 'Wake & Deploy' first."
+                )
+                return
+            }
+            let decoded = try JSONDecoder().decode(OrphanWeightsResponse.self, from: data)
+            orphanGroups = decoded.groups ?? []
+            orphanTotalGB = decoded.total_size_gb ?? 0.0
+            if orphanGroups.isEmpty {
+                showCleanupConfirm = false
+                statusMessage = L(
+                    "✅ 没有发现冗余权重，\(activeModelSpec.name) 的磁盘文件都在当前清单内。",
+                    "✅ No redundant weights found for \(activeModelSpec.name); all files match the current manifest."
+                )
+            } else {
+                let lines = orphanGroups.prefix(8).map { g in
+                    "• \(g.dir)  \(g.file_count) 个文件 · \(String(format: "%.2f", g.size_gb)) GB"
+                }
+                let more = orphanGroups.count > 8
+                    ? L("\n… 及其余 \(orphanGroups.count - 8) 个目录", "\n… and \(orphanGroups.count - 8) more folders")
+                    : ""
+                cleanupSummary = L(
+                    "将永久删除以下不在当前权重清单中的冗余文件（合计 \(String(format: "%.2f", orphanTotalGB)) GB）：\n",
+                    "Permanently delete these redundant files not in the current weight manifest (total \(String(format: "%.2f", orphanTotalGB)) GB):\n"
+                ) + lines.joined(separator: "\n") + more + L(
+                    "\n\n当前磁盘可用 \(String(format: "%.1f", decoded.disk_free_gb ?? 0)) GB；清单内权重与配置文件不会被删除。",
+                    "\n\nDisk free: \(String(format: "%.1f", decoded.disk_free_gb ?? 0)) GB. Manifest weights and config files are untouched."
+                )
+                showCleanupConfirm = true
+            }
+        } catch {
+            statusMessage = L(
+                "清理预览失败（请确认已点「唤醒并部署」更新服务端）: \(error.localizedDescription)",
+                "Cleanup preview failed (make sure you clicked 'Wake & Deploy' to update the server): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// 执行清理：服务端会重新扫描并只删除冗余权重文件
+    func cleanupOrphanWeights() async {
+        let base = normalizedBaseURL
+        guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/cleanup_weights") else { return }
+        isCleaningWeights = true
+        defer { isCleaningWeights = false }
+        do {
+            var req = try adminRequest(url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["model_id": selectedModelId])
+            let (data, _) = try await adminSession.data(for: req)
+            let decoded = try JSONDecoder().decode(CleanupWeightsResponse.self, from: data)
+            if decoded.ok == false {
+                statusMessage = decoded.message ?? L("清理失败", "Cleanup failed")
+            } else {
+                statusMessage = L(
+                    "🧹 \(decoded.message ?? "清理完成") 当前磁盘可用 \(String(format: "%.1f", decoded.disk_free_gb ?? 0)) GB。",
+                    "🧹 \(decoded.message ?? "Cleanup done") Disk free now \(String(format: "%.1f", decoded.disk_free_gb ?? 0)) GB."
+                )
+                orphanGroups = []
+                orphanTotalGB = 0.0
+                await checkColabStatus()
+            }
+        } catch {
+            statusMessage = L("清理失败: \(error.localizedDescription)", "Cleanup failed: \(error.localizedDescription)")
         }
     }
 

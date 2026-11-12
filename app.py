@@ -2768,6 +2768,73 @@ def check_model_files_status(model_id: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+# ==============================================================================
+# 冗余权重扫描与清理（供客户端「清理冗余权重」按钮调用）
+#   只处理模型持久化目录里「不在当前 MODEL_CATALOG 清单中」的权重文件，
+#   例如 H3-Image 改用 transformer_diffusers/ 之后遗留的 transformer/、vae/。
+#   配置文件、清单内权重、目录之外的路径一律不动。
+# ==============================================================================
+_ORPHAN_WEIGHT_EXTS = (".safetensors", ".bin", ".gguf", ".pt", ".pth", ".part", ".tmp")
+
+
+def _scan_orphan_weight_files(model_id: str) -> List[Dict[str, Any]]:
+    """扫描模型目录下的冗余权重文件，返回 {root, rel, abs, size} 列表"""
+    spec = MODEL_CATALOG.get(model_id)
+    if not spec:
+        raise ValueError(f"未知模型 ID: {model_id}")
+    required = {fname for fname, _ in spec.get("files", [])}
+    ram_dir, nvme_dir, drive_dir = _get_model_dirs(model_id)
+    roots: List[str] = []
+    for d in (ram_dir, nvme_dir, drive_dir):
+        if not d or not os.path.isdir(d):
+            continue
+        abs_d = os.path.abspath(d)
+        if abs_d not in roots:
+            roots.append(abs_d)
+
+    items: List[Dict[str, Any]] = []
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root):
+            # 不跟随符号链接目录，避免在内存盘 / 本地盘 / 云盘之间重复扫描
+            dirnames[:] = [dn for dn in dirnames if not os.path.islink(os.path.join(dirpath, dn))]
+            for fn in filenames:
+                abs_p = os.path.join(dirpath, fn)
+                rel = os.path.relpath(abs_p, root).replace(os.sep, "/")
+                if rel in required or not fn.lower().endswith(_ORPHAN_WEIGHT_EXTS):
+                    continue
+                try:
+                    size = os.path.getsize(abs_p)
+                except OSError:
+                    continue
+                items.append({"root": root, "rel": rel, "abs": abs_p, "size": size})
+    return items
+
+
+def _orphan_weight_groups(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """按子目录聚合，供 UI 预览展示"""
+    groups: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        key = it["rel"].rsplit("/", 1)[0] + "/" if "/" in it["rel"] else "(模型根目录)"
+        g = groups.setdefault(key, {"dir": key, "file_count": 0, "size_gb": 0.0})
+        g["file_count"] += 1
+        g["size_gb"] += it["size"] / (1024 ** 3)
+    out = sorted(groups.values(), key=lambda g: -g["size_gb"])
+    for g in out:
+        g["size_gb"] = round(g["size_gb"], 2)
+    return {
+        "groups": out,
+        "file_count": len(items),
+        "total_size_gb": round(sum(it["size"] for it in items) / (1024 ** 3), 2),
+    }
+
+
+def _disk_free_gb() -> float:
+    try:
+        return round(shutil.disk_usage(os.getcwd()).free / (1024 ** 3), 1)
+    except OSError:
+        return 0.0
+
+
 _TELEMETRY_LOCK = threading.Lock()
 _CACHED_DRIVE_METRICS: Dict[str, Any] = {
     "ts": 0.0,
@@ -7064,6 +7131,10 @@ class DownloadModelRequest(BaseModel):
     modality: str = "auto"
 
 
+class OrphanWeightsRequest(BaseModel):
+    model_id: Optional[str] = None
+
+
 class LoadModelRequest(BaseModel):
     model_id: Optional[str] = None
     precision_mode: str = "bf16"
@@ -8691,6 +8762,82 @@ def attach_macos_api_routes(app: FastAPI):
     @app.get("/minimax_api/status")
     def api_status(model_id: Optional[str] = None):
         return get_gpu_status_dict(model_id=model_id)
+
+    @app.post("/minimax_api/orphan_weights")
+    def api_orphan_weights(req: OrphanWeightsRequest):
+        """预览：列出当前模型目录下不在权重清单中的冗余文件（不删除）"""
+        target_id = req.model_id if (req.model_id and req.model_id in MODEL_CATALOG) else SELECTED_MODEL_ID
+        try:
+            items = _scan_orphan_weight_files(target_id)
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"ok": False, "message": str(e)})
+        payload = _orphan_weight_groups(items)
+        payload.update({
+            "ok": True,
+            "model_id": target_id,
+            "model_name": MODEL_CATALOG[target_id]["name"],
+            "disk_free_gb": _disk_free_gb(),
+        })
+        return payload
+
+    @app.post("/minimax_api/cleanup_weights")
+    def api_cleanup_weights(req: OrphanWeightsRequest):
+        """执行清理：只删除本次扫描出的冗余权重文件，逐项做白名单与路径校验"""
+        target_id = req.model_id if (req.model_id and req.model_id in MODEL_CATALOG) else SELECTED_MODEL_ID
+        spec = MODEL_CATALOG.get(target_id)
+        if not spec or spec.get("is_custom"):
+            return JSONResponse(status_code=400, content={"ok": False, "message": "仅支持内置模型的冗余权重清理。"})
+        required = {fname for fname, _ in spec.get("files", [])}
+        try:
+            items = _scan_orphan_weight_files(target_id)
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"ok": False, "message": str(e)})
+
+        deleted = 0
+        freed = 0
+        for it in items:
+            abs_p, root, rel = it["abs"], it["root"], it["rel"]
+            # 二次校验：路径仍在模型根目录内、不在清单内、且是权重类文件
+            try:
+                if os.path.commonpath([os.path.abspath(abs_p), root]) != root:
+                    continue
+            except ValueError:
+                continue
+            if rel in required or not os.path.basename(abs_p).lower().endswith(_ORPHAN_WEIGHT_EXTS):
+                continue
+            if not (os.path.isfile(abs_p) or os.path.islink(abs_p)):
+                continue
+            try:
+                os.remove(abs_p)
+                deleted += 1
+                freed += it["size"]
+            except OSError as e:
+                print(f"⚠️ 清理冗余权重 {rel} 失败: {e}")
+
+        # 清理因此变空的子目录（例如遗留的 transformer/、vae/）
+        for d in {it["root"] for it in items}:
+            for dirpath, dirnames, filenames in os.walk(d, topdown=False):
+                if os.path.abspath(dirpath) == os.path.abspath(d):
+                    continue
+                try:
+                    if not os.listdir(dirpath):
+                        os.rmdir(dirpath)
+                except OSError:
+                    pass
+
+        freed_gb = round(freed / (1024 ** 3), 2)
+        msg = f"已清理 {deleted} 个冗余权重文件，释放 {freed_gb:.2f} GB 磁盘空间。"
+        print(f"🧹 {msg}")
+        with _TELEMETRY_LOCK:
+            _CACHED_FILE_STATUS_MAP.clear()
+        return {
+            "ok": True,
+            "model_id": target_id,
+            "deleted_files": deleted,
+            "freed_gb": freed_gb,
+            "disk_free_gb": _disk_free_gb(),
+            "message": msg,
+        }
 
     @app.post("/minimax_api/select_model")
     def api_select_model(req: SelectModelRequest):
