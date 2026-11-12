@@ -416,12 +416,12 @@ class ColabGuideDialog(QDialog):
             ),
             (
                 tr(
-                    "Qwen-Image-2.1 / Z-Image-Turbo · 2K 海报生图与自然语言修图",
-                    "Qwen-Image-2.1 / Z-Image-Turbo · 2K Posters & Instruction Editing",
+                    "Qwen-Image-2.1 / Z-Image-Turbo / MiniMax-H3-Image · 2K 海报与 4K 直出修图",
+                    "Qwen-Image-2.1 / Z-Image-Turbo / MiniMax-H3-Image · 2K Posters & Native 4K",
                 ),
                 tr(
-                    "支持精准中英文海报排版直出、双图自然语言融合修图与 8 步极速写实摄影生成。",
-                    "Accurate bilingual poster typography, dual-image natural language fusion editing, and 8-step turbo photorealistic generation.",
+                    "支持精准中英文海报排版直出、双图自然语言融合修图、8 步极速写实摄影与 MiniMax-H3-Image 6 步 4K 直出。",
+                    "Accurate bilingual poster typography, dual-image fusion editing, 8-step turbo photorealism & MiniMax-H3-Image native 4K in 6 steps.",
                 ),
                 tr("切换至 Qwen-Image-2.1 图像工作台", "Switch to Qwen-Image-2.1 Image Studio"),
                 "qwen_image_21",

@@ -203,6 +203,56 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
         ]
     ),
     OpenModelSpec(
+        id: "minimax_h3_image",
+        nameZh: "MiniMax-H3-Image (4K)",
+        nameEn: "MiniMax-H3-Image (4K)",
+        repoId: "MiniMaxAI/MiniMax-H3-Image",
+        badgeZh: "4K 直出 · 6 步蒸馏 · 135 GB",
+        badgeEn: "Native 4K · 6-Step Distilled · 135 GB",
+        summaryZh: "MiniMax H3 家族开源图像模型：1600 万像素 4K 直出，支持文生图与最多 16 张参考图编辑，6 步极速采样",
+        summaryEn: "Open-weight 4K (16MP) image model from the H3 family: text-to-image & up to 16-reference editing in 6 steps",
+        approxSizeGB: 135.4,
+        icon: "photo.artframe",
+        modality: .image,
+        defaultSteps: 6,
+        modes: [
+            TaskModeItem(
+                id: "t2i",
+                titleZh: "4K 高清文生图",
+                titleEn: "4K Text-to-Image",
+                subtitleZh: "1600 万像素 4K 原生直出，照片级细节与精准构图",
+                subtitleEn: "Native 16MP 4K output with photoreal detail and precise composition",
+                icon: "photo.artframe"
+            ),
+            TaskModeItem(
+                id: "i2i_edit",
+                titleZh: "多参考图指令编辑",
+                titleEn: "Multi-Reference Edit",
+                subtitleZh: "上传 1~2 张参考图，用自然语言改局部、换背景或融合主体",
+                subtitleEn: "Upload 1–2 references to edit, swap backgrounds or fuse subjects via natural language",
+                icon: "wand.and.rays"
+            )
+        ],
+        defaultFiles: (1...12).map { i in
+            ModelFileItem(
+                name: String(format: "transformer/model-%05d-of-00012.safetensors", i),
+                desc: "H3-Image DiT BF16 \(i)/12",
+                exists: false,
+                size_gb: 0
+            )
+        } + (1...14).map { i in
+            ModelFileItem(
+                name: String(format: "text_encoder/model-%05d-of-00014.safetensors", i),
+                desc: "Qwen3-VL 编码器 BF16 \(i)/14",
+                exists: false,
+                size_gb: 0
+            )
+        } + [
+            ModelFileItem(name: "vae/diffusion_pytorch_model.safetensors", desc: "4K 图像 VAE", exists: false, size_gb: 0),
+            ModelFileItem(name: "pdd_fused_heads.safetensors", desc: "6 步 PDD 融合输出头", exists: false, size_gb: 0)
+        ]
+    ),
+    OpenModelSpec(
         id: "comfyui_studio",
         nameZh: "ComfyUI 节点工作台",
         nameEn: "ComfyUI Node Studio",
@@ -446,6 +496,19 @@ let IMAGE_RESOLUTIONS: [ResolutionOption] = [
     ResolutionOption(id: "i_768_1344", labelZh: "768 × 1344 (9:16 竖版海报)", labelEn: "768 × 1344 (9:16 Vertical Poster)", width: 768, height: 1344),
     ResolutionOption(id: "i_1536_1024", labelZh: "1536 × 1024 (3:2 单反摄影)", labelEn: "1536 × 1024 (3:2 DSLR Photo)", width: 1536, height: 1024)
 ]
+
+let H3_IMAGE_RESOLUTIONS: [ResolutionOption] = [
+    ResolutionOption(id: "h3_4096_4096", labelZh: "4096 × 4096 (1:1 4K 方图 · 推荐)", labelEn: "4096 × 4096 (1:1 4K Square · Recommended)", width: 4096, height: 4096),
+    ResolutionOption(id: "h3_4736_3552", labelZh: "4736 × 3552 (4:3 4K 横图)", labelEn: "4736 × 3552 (4:3 4K Landscape)", width: 4736, height: 3552),
+    ResolutionOption(id: "h3_3552_4736", labelZh: "3552 × 4736 (3:4 4K 竖图)", labelEn: "3552 × 4736 (3:4 4K Portrait)", width: 3552, height: 4736),
+    ResolutionOption(id: "h3_5472_3072", labelZh: "5472 × 3072 (16:9 4K 宽屏)", labelEn: "5472 × 3072 (16:9 4K Widescreen)", width: 5472, height: 3072),
+    ResolutionOption(id: "h3_3072_5472", labelZh: "3072 × 5472 (9:16 4K 竖屏)", labelEn: "3072 × 5472 (9:16 4K Portrait)", width: 3072, height: 5472),
+    ResolutionOption(id: "h3_6272_2688", labelZh: "6272 × 2688 (21:9 4K 超宽)", labelEn: "6272 × 2688 (21:9 4K Ultra-wide)", width: 6272, height: 2688),
+]
+
+func imageResolutions(forModelId modelId: String) -> [ResolutionOption] {
+    modelId == "minimax_h3_image" ? H3_IMAGE_RESOLUTIONS : IMAGE_RESOLUTIONS
+}
 
 struct PresetTemplate: Identifiable {
     let id: String

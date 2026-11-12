@@ -230,7 +230,7 @@ private fun OnboardingGuideDialog(
         ),
         Triple(
             L("3. 5 大多模态引擎 + ComfyUI", "3. 5 Multimodal Engines + ComfyUI"),
-            L("畅玩 MiniMax-H3 有声视频、Z-Image 8 步生图、Qwen-Image 修图、Qwen3.8 256K 推理与 4 套预置视频工作流包。", "Create stereo audio-videos, posters, photo edits, 256K CoT reasoning, and 4 preset ComfyUI video packs."),
+            L("畅玩 MiniMax-H3 有声视频、MiniMax-H3-Image 4K 直出、Z-Image 8 步生图、Qwen-Image 修图、Qwen3.8 256K 推理与 4 套预置视频工作流包。", "Create stereo audio-videos, native 4K images, posters, photo edits, 256K CoT reasoning, and 4 preset ComfyUI video packs."),
             "🎬"
         ),
         Triple(

@@ -49,6 +49,7 @@ from windows_app.models import (
     GPU_CHOICES,
     IMAGE_RESOLUTIONS,
     MODEL_SPEC_MAP,
+    image_resolutions_for,
     OPEN_MODEL_CATALOG,
     PRESET_TEMPLATES,
     VIDEO_DURATION_PRESETS,
@@ -798,7 +799,7 @@ class EasyColabMainWindow(WorkspaceMixin, QMainWindow):
         ip_lay.setSpacing(8)
         ip_lay.addWidget(QLabel(tr("输出画幅", "Aspect Ratio & Size")))
         self.img_res_combo = QComboBox()
-        for r in IMAGE_RESOLUTIONS:
+        for r in image_resolutions_for(self.vm.selected_model_id):
             self.img_res_combo.addItem(r.label, r.id)
         ir_idx = self.img_res_combo.findData(self.vm.selected_image_res.id)
         if ir_idx >= 0:
@@ -1180,9 +1181,29 @@ class EasyColabMainWindow(WorkspaceMixin, QMainWindow):
         self.vm.inference_steps = snapped
         self.vid_steps_lbl.setText(tr(f"{snapped} 步", f"{snapped} steps"))
 
+    def _sync_img_res_options(self, model_id: str) -> None:
+        """切换模型时把画幅下拉刷新为对应分辨率表（H3-Image 使用 4K 画幅）"""
+        if not hasattr(self, "img_res_combo"):
+            return
+        wanted = image_resolutions_for(model_id)
+        current = [self.img_res_combo.itemData(i) for i in range(self.img_res_combo.count())]
+        if current == [r.id for r in wanted]:
+            return
+        self.img_res_combo.blockSignals(True)
+        self.img_res_combo.clear()
+        for r in wanted:
+            self.img_res_combo.addItem(r.label, r.id)
+        idx = self.img_res_combo.findData(self.vm.selected_image_res.id)
+        if idx >= 0:
+            self.img_res_combo.setCurrentIndex(idx)
+        self.img_res_combo.blockSignals(False)
+
     def _on_img_res_changed(self, idx: int) -> None:
-        if 0 <= idx < len(IMAGE_RESOLUTIONS):
-            self.vm.selected_image_res = IMAGE_RESOLUTIONS[idx]
+        if self._syncing_ui:
+            return
+        opts = image_resolutions_for(self.vm.selected_model_id)
+        if 0 <= idx < len(opts):
+            self.vm.selected_image_res = opts[idx]
 
     def _on_img_steps_changed(self, val: int) -> None:
         self.vm.inference_steps = int(val)
@@ -1311,6 +1332,7 @@ class EasyColabMainWindow(WorkspaceMixin, QMainWindow):
         self._syncing_ui = True
         pal = self.palette_obj
         spec = self.vm.active_model_spec
+        self._sync_img_res_options(spec.id)
 
         # 1. Connection & Account
         if self.vm.is_connected:

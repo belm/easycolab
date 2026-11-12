@@ -36,8 +36,9 @@ Headless Drive mounting can still copy a Google refresh token with Colab and Clo
   3. **`Qwen3.8-27B (UD-Q4_K_M + MTP Speculative Decoding / BF16)` · 100 tok/s Vision Chat & Dual-Protocol API Gateway**
      - Supports up to `256K` context length, deep chain-of-thought reasoning, and multimodal image analysis / prompt reverse-engineering.
      - Built-in public API gateway compatible with both **OpenAI (`/v1/chat/completions`)** and **Anthropic (`/v1/messages`)** (with Bearer / `x-api-key` authentication), ready to plug directly into **Claude Code**, **Cursor**, and custom agent workflows.
-  4. **`Qwen-Image-2.1` & `Z-Image-Turbo` · 2K Poster Generation & Multi-Image Instruction Editing**
-     - High-fidelity bilingual typography rendering, natural-language multi-image editing, and 8-step ultra-fast photorealistic generation. All generated MP4 videos and PNG images are automatically pulled back to your local machine (macOS: `~/Movies/EasyColab`, Windows: `%USERPROFILE%\Videos\EasyColab`, Linux: `~/Videos/EasyColab`).
+  4. **`Qwen-Image-2.1`, `Z-Image-Turbo` & `MiniMax-H3-Image (4K)` · 2K Posters, Multi-Image Editing & Native 4K Output**
+     - High-fidelity bilingual typography, natural-language multi-image editing, and 8-step ultra-fast photorealistic generation. New **[MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image)** support adds native `4096 × 4096` / 16-megapixel 4K output, 6-step distilled sampling (no CFG), and up to 16 reference images; it shares the exact text encoder with MiniMax-H3 (saving a 66.7 GB re-download when H3 is already installed).
+     - All generated MP4 videos and PNG images are automatically pulled back to your local machine (macOS: `~/Movies/EasyColab`, Windows: `%USERPROFILE%\Videos\EasyColab`, Linux: `~/Videos/EasyColab`).
 
 ---
 

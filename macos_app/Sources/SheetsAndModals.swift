@@ -535,10 +535,10 @@ struct ColabGuideSheet: View {
 
         guideInfoCard(
             number: "D",
-            title: L("Qwen-Image-2.1 / Z-Image-Turbo · 2K 海报生图与自然语言修图", "Qwen-Image-2.1 / Z-Image-Turbo · 2K Poster Generation & Image Editing"),
+            title: L("Qwen-Image-2.1 / Z-Image-Turbo / MiniMax-H3-Image · 2K 海报与 4K 直出修图", "Qwen-Image-2.1 / Z-Image-Turbo / MiniMax-H3-Image · 2K Posters & Native 4K Editing"),
             detail: L(
-                "支持精准中英文海报排版直出，以及上传 1～2 张参考图用一句话指令改服装、换背景或融合多图主体；Z-Image-Turbo 更支持 8 步秒级出图。",
-                "Render crisp bilingual typography posters, or upload 1–2 reference images for natural-language outfit swaps, background replacement, and multi-subject fusion; Z-Image-Turbo delivers sub-second 8-step generation."
+                "支持精准中英文海报排版直出，以及上传 1～2 张参考图用一句话指令改服装、换背景或融合多图主体；Z-Image-Turbo 更支持 8 步秒级出图；MiniMax-H3-Image 可 6 步直出 1600 万像素 4K 画面。",
+                "Render crisp bilingual typography posters, or upload 1–2 reference images for natural-language outfit swaps, background replacement, and multi-subject fusion; Z-Image-Turbo delivers sub-second 8-step generation; MiniMax-H3-Image outputs native 16MP 4K in 6 steps."
             ),
             palette: palette
         ) {

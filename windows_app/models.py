@@ -834,6 +834,48 @@ OPEN_MODEL_CATALOG: List[OpenModelSpec] = [
         ],
     ),
     OpenModelSpec(
+        id="minimax_h3_image",
+        name_zh="MiniMax-H3-Image (4K)",
+        name_en="MiniMax-H3-Image (4K)",
+        repo_id="MiniMaxAI/MiniMax-H3-Image",
+        badge_zh="4K 直出 · 6 步蒸馏 · 135 GB",
+        badge_en="Native 4K · 6-Step Distilled · 135 GB",
+        summary_zh="MiniMax H3 家族开源图像模型：1600 万像素 4K 直出，支持文生图与最多 16 张参考图编辑，6 步极速采样",
+        summary_en="Open-weight 4K (16MP) image model from the H3 family: text-to-image & up to 16-reference editing in 6 steps",
+        approx_size_gb=135.4,
+        icon="photo.artframe",
+        modality=ModelModality.IMAGE,
+        default_steps=6,
+        modes=[
+            TaskModeItem(
+                id="t2i",
+                title_zh="4K 高清文生图",
+                title_en="4K Text-to-Image",
+                subtitle_zh="1600 万像素 4K 原生直出，照片级细节与精准构图",
+                subtitle_en="Native 16MP 4K output with photoreal detail and precise composition",
+                icon="photo.artframe",
+            ),
+            TaskModeItem(
+                id="i2i_edit",
+                title_zh="多参考图指令编辑",
+                title_en="Multi-Reference Edit",
+                subtitle_zh="上传 1~2 张参考图，用自然语言改局部、换背景或融合主体",
+                subtitle_en="Upload 1-2 references to edit, swap backgrounds or fuse subjects via natural language",
+                icon="wand.and.rays",
+            ),
+        ],
+        default_files=[
+            ModelFileItem(name="transformer/model-%05d-of-00012.safetensors" % i, desc="H3-Image DiT BF16 %d/12" % i, desc_en="H3-Image DiT BF16 %d/12" % i)
+            for i in range(1, 13)
+        ] + [
+            ModelFileItem(name="text_encoder/model-%05d-of-00014.safetensors" % i, desc="Qwen3-VL 编码器 %d/14" % i, desc_en="Qwen3-VL Encoder %d/14" % i)
+            for i in range(1, 15)
+        ] + [
+            ModelFileItem(name="vae/diffusion_pytorch_model.safetensors", desc="4K 图像 VAE", desc_en="4K Image VAE"),
+            ModelFileItem(name="pdd_fused_heads.safetensors", desc="6 步 PDD 融合输出头", desc_en="6-Step PDD Fused Heads"),
+        ],
+    ),
+    OpenModelSpec(
         id="qwen_image_21",
         name_zh="Qwen-Image-2.1",
         name_en="Qwen-Image-2.1",
@@ -987,6 +1029,55 @@ IMAGE_RESOLUTIONS: List[ResolutionOption] = [
         1024,
     ),
 ]
+
+H3_IMAGE_RESOLUTIONS: List[ResolutionOption] = [
+    ResolutionOption(
+        "h3_4096_4096",
+        "4096 × 4096 (1:1 4K 方图 · 推荐)",
+        "4096 × 4096 (1:1 4K Square · Recommended)",
+        4096,
+        4096,
+    ),
+    ResolutionOption(
+        "h3_4736_3552",
+        "4736 × 3552 (4:3 4K 横图)",
+        "4736 × 3552 (4:3 4K Landscape)",
+        4736,
+        3552,
+    ),
+    ResolutionOption(
+        "h3_3552_4736",
+        "3552 × 4736 (3:4 4K 竖图)",
+        "3552 × 4736 (3:4 4K Portrait)",
+        3552,
+        4736,
+    ),
+    ResolutionOption(
+        "h3_5472_3072",
+        "5472 × 3072 (16:9 4K 宽屏)",
+        "5472 × 3072 (16:9 4K Widescreen)",
+        5472,
+        3072,
+    ),
+    ResolutionOption(
+        "h3_3072_5472",
+        "3072 × 5472 (9:16 4K 竖屏)",
+        "3072 × 5472 (9:16 4K Portrait)",
+        3072,
+        5472,
+    ),
+    ResolutionOption(
+        "h3_6272_2688",
+        "6272 × 2688 (21:9 4K 超宽)",
+        "6272 × 2688 (21:9 4K Ultra-wide)",
+        6272,
+        2688,
+    ),
+]
+
+def image_resolutions_for(model_id: str) -> List[ResolutionOption]:
+    """MiniMax-H3-Image 原生 4K 画幅；其它图像模型沿用标准 1K~1.5K 画幅"""
+    return H3_IMAGE_RESOLUTIONS if model_id == "minimax_h3_image" else IMAGE_RESOLUTIONS
 
 PRESET_TEMPLATES: List[PresetTemplate] = [
     PresetTemplate(

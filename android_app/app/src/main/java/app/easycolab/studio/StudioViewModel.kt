@@ -902,6 +902,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     fun switchSelectedModel(spec: OpenModelSpec) {
         if (selectedModelId == spec.id) return
         selectedModelId = spec.id
+        if (spec.modality == ModelModality.IMAGE) {
+            val opts = imageResolutionsFor(spec.id)
+            if (opts.none { it.id == selectedImageResolution.id }) {
+                selectedImageResolution = opts[0]
+            }
+        }
         taskModeId = spec.modes[0].id
         inferenceSteps = spec.defaultSteps
         modelFiles = spec.defaultFiles

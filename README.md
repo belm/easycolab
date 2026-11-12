@@ -36,8 +36,9 @@ Drive 无浏览器挂载仍可能将带有 Colab 和 Cloud Platform 授权的 Go
   3. **`Qwen3.8-27B (UD-Q4_K_M + MTP 投机解码 / BF16)` · 100 tok/s 视觉对话与双协议网关**
      - 支持最高 `256K` 上下文、长思维链推理、多模态看图反推提示词。
      - 内置兼容 **OpenAI (`/v1/chat/completions`)** 与 **Anthropic (`/v1/messages`)** 的公网 API 网关（支持 Bearer / `x-api-key` 鉴权），可直接接入 **Claude Code**、**Cursor** 等开发工具。
-  4. **`Qwen-Image-2.1` & `Z-Image-Turbo` · 2K 海报生图与多图指令修图**
-     - 支持高质感中英文排版直出、双图自然语言指令修图与 8 步极速出图；所有生成的 MP4 / PNG 自动回传至本地目录（macOS: `~/Movies/EasyColab`，Windows: `%USERPROFILE%\Videos\EasyColab`，Linux: `~/Videos/EasyColab`）。
+  4. **`Qwen-Image-2.1`、`Z-Image-Turbo` & `MiniMax-H3-Image (4K)` · 2K 海报生图与 4K 直出修图**
+     - 支持高质感中英文排版直出、双图自然语言指令修图与 8 步极速出图；新增 **[MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image)** 支持 `4096 × 4096` / 1600 万像素原生 4K 直出、6 步蒸馏采样（无 CFG）与最多 16 张参考图编辑，文本编码器与 MiniMax-H3 完全共用（已下载 H3 可省 66.7 GB 重复下载）。
+     - 所有生成的 MP4 / PNG 自动回传至本地目录（macOS: `~/Movies/EasyColab`，Windows: `%USERPROFILE%\Videos\EasyColab`，Linux: `~/Videos/EasyColab`）。
 
 ---
 

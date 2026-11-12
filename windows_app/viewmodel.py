@@ -26,6 +26,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from windows_app.models import (
     IMAGE_RESOLUTIONS,
     MODEL_SPEC_MAP,
+    image_resolutions_for,
     OPEN_MODEL_CATALOG,
     PRESET_TEMPLATES,
     VIDEO_RESOLUTIONS,
@@ -974,6 +975,10 @@ class EasyColabViewModel(ViewModelServicesMixin, QObject):
             return
         spec = MODEL_SPEC_MAP[model_id]
         self.selected_model_id = model_id
+        if spec.modality == ModelModality.IMAGE:
+            opts = image_resolutions_for(model_id)
+            if self.selected_image_res.id not in [r.id for r in opts]:
+                self.selected_image_res = opts[0]
         if spec.modes:
             self.task_mode_id = spec.modes[0].id
         self.inference_steps = spec.default_steps

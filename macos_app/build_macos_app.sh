@@ -11,6 +11,8 @@ if [ -f "${VERSION_FILE}" ]; then
     APP_VERSION="$(tr -d '[:space:]' < "${VERSION_FILE}")"
 fi
 APP_VERSION="${APP_VERSION:-1.1.0}"
+# ARCH=arm64 可只编译 Apple Silicon 纯 arm64 包（默认仍尝试 Universal arm64 + x86_64）
+BUILD_ARCH="${ARCH:-universal}"
 BUNDLE_DIR="${PROJECT_ROOT}/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
@@ -129,7 +131,7 @@ iconutil -c icns "${ICONSET_DIR}" -o "${RESOURCES_DIR}/AppIcon.icns"
 rm -rf "${ICONSET_DIR}"
 
 # 3. 编译原生 SwiftUI macOS 通用可执行程序 (兼容 macOS 13.0+ Ventura/Sonoma/Sequoia/Tahoe/27 及 Apple Silicon + Intel)
-echo "Compiling SwiftUI native macOS Universal app (${APP_NAME} v${APP_VERSION}, target macOS 13.0+)..."
+echo "Compiling SwiftUI native macOS app (${APP_NAME} v${APP_VERSION}, ${BUILD_ARCH}, target macOS 13.0+)..."
 swiftc -O \
     -target arm64-apple-macos13.0 \
     -parse-as-library \
@@ -141,7 +143,10 @@ swiftc -O \
     "${SCRIPT_DIR}"/Sources/*.swift \
     -o "${MACOS_DIR}/${EXEC_NAME}_arm64"
 
-if swiftc -O \
+if [ "${BUILD_ARCH}" = "arm64" ]; then
+    mv -f "${MACOS_DIR}/${EXEC_NAME}_arm64" "${MACOS_DIR}/${EXEC_NAME}"
+    echo "✅ Built arm64-only Binary (minos 13.0)"
+elif swiftc -O \
     -target x86_64-apple-macos13.0 \
     -parse-as-library \
     -framework SwiftUI \
@@ -166,7 +171,11 @@ xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
 codesign --force --deep --sign - "${BUNDLE_DIR}"
 touch "${BUNDLE_DIR}"
 
-ZIP_PATH="${PROJECT_ROOT}/EasyColab-macOS.zip"
+if [ "${BUILD_ARCH}" = "arm64" ]; then
+    ZIP_PATH="${PROJECT_ROOT}/EasyColab-macOS-arm64.zip"
+else
+    ZIP_PATH="${PROJECT_ROOT}/EasyColab-macOS.zip"
+fi
 rm -f "${ZIP_PATH}"
 ditto -c -k --sequesterRsrc --keepParent "${BUNDLE_DIR}" "${ZIP_PATH}"
 

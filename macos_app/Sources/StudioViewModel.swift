@@ -102,11 +102,11 @@ class StudioViewModel: ObservableObject {
     static let defaultReadyStatusEn = "Ready: G4 (RTX PRO 6000 · 96GB) selected by default. Wake & deploy from the left sidebar."
     static let defaultWelcomeLinesZh: [String] = [
         "欢迎使用 EasyColab 多模态云端算力工作台",
-        "默认搭载 G4 (RTX PRO 6000 · 96GB)，支持一键部署 ComfyUI 节点工作台 (云盘软链持久化)、MiniMax-H3、Qwen3.8-27B (UD-Q4_K_M GGUF 100 tok/s / BF16)、Qwen-Image-2.1 与 Z-Image-Turbo。"
+        "默认搭载 G4 (RTX PRO 6000 · 96GB)，支持一键部署 ComfyUI 节点工作台 (云盘软链持久化)、MiniMax-H3、Qwen3.8-27B (UD-Q4_K_M GGUF 100 tok/s / BF16)、Qwen-Image-2.1、Z-Image-Turbo 与 MiniMax-H3-Image (4K)。"
     ]
     static let defaultWelcomeLinesEn: [String] = [
         "Welcome to EasyColab Multimodal Cloud GPU Studio",
-        "Powered by G4 (RTX PRO 6000 · 96GB) by default — 1-click deploy ComfyUI Node Studio (Drive symlink persistence), MiniMax-H3, Qwen3.8-27B (UD-Q4_K_M GGUF 100 tok/s / BF16), Qwen-Image-2.1 & Z-Image-Turbo."
+        "Powered by G4 (RTX PRO 6000 · 96GB) by default — 1-click deploy ComfyUI Node Studio (Drive symlink persistence), MiniMax-H3, Qwen3.8-27B (UD-Q4_K_M GGUF 100 tok/s / BF16), Qwen-Image-2.1, Z-Image-Turbo & MiniMax-H3-Image (4K)."
     ]
     static let clearedConsoleLineZh = "已清空历史输出，正在监听云端实时日志..."
     static let clearedConsoleLineEn = "Cleared log history. Listening for live cloud logs..."
@@ -670,6 +670,10 @@ class StudioViewModel: ObservableObject {
     func switchSelectedModel(_ spec: OpenModelSpec) {
         guard selectedModelId != spec.id else { return }
         selectedModelId = spec.id
+        let resList = imageResolutions(forModelId: spec.id)
+        if spec.modality == .image && !resList.contains(selectedImageResolution) {
+            selectedImageResolution = resList[0]
+        }
         taskModeId = spec.modes[0].id
         inferenceSteps = spec.defaultSteps
         selectedPrecision = "bf16"

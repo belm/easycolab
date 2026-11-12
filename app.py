@@ -1320,6 +1320,38 @@ MINIMAX_H3_BF16_FILES = (
     ]
 )
 
+# MiniMax-H3-Image: 基于 H3 的 4K / 1600 万像素图像生成与多参考图编辑模型
+#   - 33.1B DiT (12 分片 BF16) + 图像 VAE (FP32) + 6 步 PDD 蒸馏融合输出头
+#   - 文本编码器与 MiniMax-H3 的 Qwen3-VL 完全一致（14 分片，blob 校验相同），可跨模型直接复用
+#   - 推理走 diffusers 的 MiniMaxH3ImagePipeline（model_index.json, diffusers >= 0.37.0）
+MINIMAX_H3_IMAGE_TEXT_ENCODER_FILES = [
+    (f"text_encoder/model-{i:05d}-of-00014.safetensors", f"Qwen3-VL 文本编码器 BF16 {i}/14 (与 MiniMax-H3 共用)")
+    for i in range(1, 15)
+]
+MINIMAX_H3_IMAGE_FILES = (
+    [
+        (f"transformer/model-{i:05d}-of-00012.safetensors", f"H3-Image 33B DiT 主干 BF16 {i}/12")
+        for i in range(1, 13)
+    ]
+    + MINIMAX_H3_IMAGE_TEXT_ENCODER_FILES
+    + [
+        ("vae/diffusion_pytorch_model.safetensors", "4K 图像 VAE 解码器 FP32 (约 2.34 GB)"),
+        ("pdd_fused_heads.safetensors", "6 步 PDD 蒸馏融合输出头 (约 12 MB)"),
+    ]
+)
+
+# H3-Image 官方最佳画幅（约 16MP / 4K，摘自模型卡 Sizes 表）
+MINIMAX_H3_IMAGE_RESOLUTIONS = (
+    (4096, 4096),   # 1:1
+    (4736, 3552),   # 4:3
+    (3552, 4736),   # 3:4
+    (5024, 3360),   # 3:2
+    (3360, 5024),   # 2:3
+    (5472, 3072),   # 16:9
+    (3072, 5472),   # 9:16
+    (6272, 2688),   # 21:9
+)
+
 # ==============================================================================
 # 开源旗舰多模型注册中心 (Hugging Face Top Models 2026 · 全量免审核 Gated=False)
 # ==============================================================================
@@ -1332,6 +1364,16 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
         "category": "全模态音视频生成 · BF16 原生满血 · 32kHz 立体声",
         "approx_size_gb": 134.1,
         "files": MINIMAX_H3_BF16_FILES,
+    },
+    "minimax_h3_image": {
+        "id": "minimax_h3_image",
+        "name": "MiniMax-H3-Image (4K)",
+        "repo_id": "MiniMaxAI/MiniMax-H3-Image",
+        "modality": "image",
+        "pipeline_arch": "minimax_h3_image",
+        "category": "4K / 1600 万像素文生图与多参考图编辑 · 6 步蒸馏 · 无 CFG",
+        "approx_size_gb": 135.4,
+        "files": MINIMAX_H3_IMAGE_FILES,
     },
     "qwen38_27b": {
         "id": "qwen38_27b",
@@ -2016,7 +2058,22 @@ def inspect_and_resolve_hf_repo(
     repo_low = repo_clean.lower()
     # 兼容已知特定多模态/图像生成仓库结构（如用户在客户端手动导入）
     if not pat_clean:
-        if repo_low == "minimaxai/minimax-h3" or "minimax-h3" in repo_low and "gguf" not in repo_low:
+        if repo_low == "minimaxai/minimax-h3-image" or (
+            "minimax-h3-image" in repo_low and "gguf" not in repo_low
+        ):
+            h3i_spec = MODEL_CATALOG["minimax_h3_image"]
+            return {
+                "repo_id": repo_clean,
+                "include_pattern": "",
+                "modality": "image",
+                "pipeline_arch": "minimax_h3_image",
+                "category": "自定义导入 · 4K 文生图与多参考图编辑 · 6 步蒸馏 · Diffusers",
+                "approx_size_gb": h3i_spec["approx_size_gb"],
+                "files": list(h3i_spec["files"]),
+            }
+        if repo_low == "minimaxai/minimax-h3" or (
+            "minimax-h3" in repo_low and "gguf" not in repo_low and "image" not in repo_low
+        ):
             return {
                 "repo_id": repo_clean,
                 "include_pattern": "",
@@ -3018,6 +3075,209 @@ def _async_backup_to_drive(src_file: str, dst_dir: str, fname: str):
         print(f"[后台云盘同步跳过] {fname}: {e}")
 
 
+# ==============================================================================
+# MiniMax-H3-Image 专用工具集
+#   1) 文本编码器与 MiniMax-H3 完全共用（分片 blob 一致）→ 已下载时零成本复用
+#   2) 官方仓库若未内嵌 text_encoder，自动从 MiniMax-H3 的 FL2VA/text_encoder 跨仓库回退下载
+#   3) 装配纯本地 Diffusers 目录（改写 model_index.json，杜绝运行时二次拉取 66.7 GB）
+# ==============================================================================
+_H3_IMAGE_TEXT_ENCODER_ASSETS = (
+    "config.json",
+    "model.safetensors.index.json",
+    "chat_template.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+    "preprocessor_config.json",
+    "video_preprocessor_config.json",
+)
+
+
+def _link_or_copy(src: str, dst: str) -> bool:
+    """在目标不存在时把已下载的权重/配置软链（失败则复制）到目标目录"""
+    if not src or not os.path.exists(src) or os.path.lexists(dst):
+        return False
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+    except OSError:
+        return False
+    try:
+        os.symlink(src, dst)
+        return True
+    except OSError:
+        try:
+            shutil.copyfile(src, dst)
+            return True
+        except OSError:
+            return False
+
+
+def _h3_shared_asset_path(rel_name: str) -> Optional[str]:
+    """在 MiniMax-H3 的三个持久化目录中查找共享资产（不对小配置文件做 64KB 门槛过滤）"""
+    ram_dir, nvme_dir, drive_dir = _get_model_dirs("minimax_h3")
+    for d in (ram_dir, nvme_dir, drive_dir):
+        if not d:
+            continue
+        p = os.path.join(d, rel_name)
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+    return None
+
+
+def _reuse_minimax_h3_text_encoder(dest_dir: str) -> int:
+    """若用户已下载 MiniMax-H3，则把其 FL2VA/text_encoder 软链到 H3-Image 目录，省去 66.7 GB 重复下载"""
+    te_dir = os.path.join(dest_dir, "text_encoder")
+    os.makedirs(te_dir, exist_ok=True)
+    linked = 0
+    for i in range(1, 15):
+        name = f"model-{i:05d}-of-00014.safetensors"
+        src = _find_existing_model_file("minimax_h3", f"FL2VA/text_encoder/{name}")
+        if src and _link_or_copy(src, os.path.join(te_dir, name)):
+            linked += 1
+    for asset in _H3_IMAGE_TEXT_ENCODER_ASSETS:
+        src = _h3_shared_asset_path(f"FL2VA/text_encoder/{asset}") or _h3_shared_asset_path(f"text_encoder/{asset}")
+        if src:
+            _link_or_copy(src, os.path.join(te_dir, asset))
+    return linked
+
+
+def _ensure_h3_image_text_encoder_assets(model_dir: str, target_id: str) -> None:
+    """加载前确保 model_dir/text_encoder 同时具备权重分片与全部配置文件"""
+    _reuse_minimax_h3_text_encoder(model_dir)
+    te_dir = os.path.join(model_dir, "text_encoder")
+    ram_dir, nvme_dir, drive_dir = _get_model_dirs(target_id)
+    for d in (ram_dir, nvme_dir, drive_dir):
+        if not d or os.path.abspath(d) == os.path.abspath(model_dir):
+            continue
+        src_dir = os.path.join(d, "text_encoder")
+        if not os.path.isdir(src_dir):
+            continue
+        for name in os.listdir(src_dir):
+            src = os.path.join(src_dir, name)
+            if os.path.isfile(src):
+                _link_or_copy(src, os.path.join(te_dir, name))
+
+
+def _download_h3_image_weight(repo_id: str, filename: str, dest_dir: str, hf_token: str) -> str:
+    """H3-Image 的文本编码器亦存在于 MiniMax-H3；主仓库缺失时跨仓库回退下载并归位"""
+    try:
+        return fast_parallel_hf_download(
+            repo_id=repo_id,
+            filename=filename,
+            dest_dir=dest_dir,
+            hf_token=hf_token,
+            num_connections=8,
+        )
+    except Exception as first_err:
+        if not filename.startswith("text_encoder/"):
+            raise
+        base = os.path.basename(filename)
+        target = os.path.join(dest_dir, filename)
+        for alt_folder in ("FL2VA/text_encoder", "text_encoder"):
+            try:
+                alt_path = fast_parallel_hf_download(
+                    repo_id="MiniMaxAI/MiniMax-H3",
+                    filename=f"{alt_folder}/{base}",
+                    dest_dir=dest_dir,
+                    hf_token=hf_token,
+                    num_connections=8,
+                )
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if os.path.abspath(alt_path) != os.path.abspath(target):
+                    if os.path.lexists(target):
+                        os.remove(target)
+                    os.replace(alt_path, target)
+                return target
+            except Exception:
+                continue
+        raise first_err
+
+
+def _h3_image_model_dir(target_id: str) -> Optional[str]:
+    """定位包含 model_index.json 的 H3-Image 顶层模型目录"""
+    ram_dir, nvme_dir, drive_dir = _get_model_dirs(target_id)
+    for d in (ram_dir, nvme_dir, drive_dir):
+        if d and os.path.exists(os.path.join(d, "model_index.json")):
+            return d
+    first = _find_existing_model_file(target_id, "transformer/model-00001-of-00012.safetensors")
+    if first:
+        root = os.path.dirname(os.path.dirname(first))
+        if os.path.exists(os.path.join(root, "model_index.json")):
+            return root
+    return None
+
+
+def _localize_minimax_h3_image_index(model_dir: str) -> None:
+    """把 model_index.json 里 text_encoder 的外部仓库引用改写为本地目录，避免运行时联网二次下载"""
+    idx_path = os.path.join(model_dir, "model_index.json")
+    if not os.path.exists(idx_path):
+        raise RuntimeError("未找到 model_index.json，请先点击「下载权重」拉取模型配置文件。")
+    with open(idx_path, "r", encoding="utf-8") as f:
+        idx = json.load(f)
+    te = idx.get("text_encoder")
+    if not (isinstance(te, list) and len(te) >= 3 and isinstance(te[2], dict)):
+        return
+    cfg = te[2]
+    if cfg.get("pretrained_model_name_or_path") == model_dir and cfg.get("subfolder") == "text_encoder":
+        return
+    cfg["pretrained_model_name_or_path"] = model_dir
+    cfg["subfolder"] = "text_encoder"
+    backup = idx_path + ".easycolab_orig"
+    if not os.path.exists(backup):
+        try:
+            shutil.copyfile(idx_path, backup)
+        except OSError:
+            pass
+    with open(idx_path, "w", encoding="utf-8") as f:
+        json.dump(idx, f, ensure_ascii=False, indent=2)
+    print(f"ℹ️ 已将 {model_dir}/model_index.json 的 text_encoder 重定向至本地权重目录（免重复下载 66.7 GB）。")
+
+
+def _h3_image_effective_size(width: int, height: int) -> Tuple[int, int]:
+    """官方有效区间 4MP~20MP（最佳约 16MP）；小尺寸请求按同比例放大至 16MP 画布生成，输出时再缩回。"""
+    w, h = max(512, int(width)), max(512, int(height))
+    target_area = 4096 * 4096
+    if w * h >= target_area:
+        return w, h
+    scale = (target_area / float(w * h)) ** 0.5
+    gw = max(32, int(round(w * scale / 32.0)) * 32)
+    gh = max(32, int(round(h * scale / 32.0)) * 32)
+    return gw, gh
+
+
+def _filter_diffusers_call_kwargs(pipe, kwargs: dict) -> dict:
+    """按管线 __call__ 真实签名过滤参数，兼容不同 diffusers 版本"""
+    import inspect
+    try:
+        params = inspect.signature(pipe.__call__).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _call_minimax_h3_image_pipe(pipe, kwargs: dict, edit_images=None):
+    """调用 MiniMaxH3ImagePipeline；自动适配参考图参数名（image / reference_images / edit_image）"""
+    import inspect
+    try:
+        params = inspect.signature(pipe.__call__).parameters
+    except (TypeError, ValueError):
+        params = {}
+    base = _filter_diffusers_call_kwargs(pipe, kwargs)
+    if edit_images:
+        accepts_any = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        if accepts_any:
+            base["image"] = edit_images
+        else:
+            for key in ("image", "reference_images", "edit_image", "input_images"):
+                if key in params:
+                    base[key] = edit_images
+                    break
+    return pipe(**base)
+
+
 def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = "") -> Tuple[bool, str]:
     global SELECTED_MODEL_ID
     touch_activity()
@@ -3059,6 +3319,13 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
         primary_dl_dir = ram_dir if ram_dir else (drive_dir if (DRIVE_MOUNTED and drive_has_space) else nvme_dir)
         os.makedirs(primary_dl_dir, exist_ok=True)
         total_files = len(req_files)
+        pipeline_arch = spec.get("pipeline_arch") or target_id
+
+        # H3-Image 与 MiniMax-H3 共用同一套 Qwen3-VL 文本编码器：已下载则直接软链复用
+        if pipeline_arch == "minimax_h3_image":
+            reused = _reuse_minimax_h3_text_encoder(primary_dl_dir)
+            if reused:
+                print(f"♻️ 已复用 MiniMax-H3 的 {reused}/14 个文本编码器分片，跳过 66.7 GB 重复下载。")
 
         for idx, (fname, desc) in enumerate(req_files):
             touch_activity()
@@ -3069,7 +3336,7 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
             if existing:
                 # 若使用 Transformers / Diffusers 目录加载或分片 GGUF，确保同一目录内有软链接以便按目录直接加载
                 pipeline_arch = spec.get("pipeline_arch") or target_id
-                if pipeline_arch in ("qwen38_27b", "transformers", "diffusers_image", "gguf"):
+                if pipeline_arch in ("qwen38_27b", "transformers", "diffusers_image", "minimax_h3_image", "gguf"):
                     target_link = os.path.join(primary_dl_dir, fname)
                     os.makedirs(os.path.dirname(target_link), exist_ok=True)
                     if os.path.abspath(existing) != os.path.abspath(target_link) and not os.path.exists(target_link):
@@ -3084,13 +3351,16 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
 
             MODEL_DOWNLOAD_STATE["message"] = f"[{idx+1}/{total_files}] 正在 8 线程并发下载 {fname} ({desc})..."
             print(MODEL_DOWNLOAD_STATE["message"])
-            dl_path = fast_parallel_hf_download(
-                repo_id=repo_id,
-                filename=fname,
-                dest_dir=primary_dl_dir,
-                hf_token=hf_token,
-                num_connections=8,
-            )
+            if pipeline_arch == "minimax_h3_image":
+                dl_path = _download_h3_image_weight(repo_id, fname, primary_dl_dir, hf_token)
+            else:
+                dl_path = fast_parallel_hf_download(
+                    repo_id=repo_id,
+                    filename=fname,
+                    dest_dir=primary_dl_dir,
+                    hf_token=hf_token,
+                    num_connections=8,
+                )
             if DRIVE_MOUNTED and drive_has_space and primary_dl_dir != drive_dir:
                 threading.Thread(
                     target=_async_backup_to_drive,
@@ -3115,13 +3385,20 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
                     download_source="huggingface",
                 )
                 proc_cfg.download_if_necessary()
-            elif pipeline_arch in ("qwen38_27b", "transformers", "diffusers_image"):
+            elif pipeline_arch in ("qwen38_27b", "transformers", "diffusers_image", "minimax_h3_image"):
+                ignore_patterns = ["*.safetensors", "*.bin", "*.pth", "*.gguf", "*.pt"]
+                if pipeline_arch == "minimax_h3_image":
+                    # 仅同步 model_index.json / pdd_config.json / tokenizer / processor / 各子目录 config，
+                    # 官方展示图与示例素材不落盘
+                    ignore_patterns += ["assets/*", "examples/*", "*.jpg", "*.png", "*.mp4"]
                 snapshot_download(
                     repo_id=repo_id,
                     local_dir=primary_dl_dir,
-                    ignore_patterns=["*.safetensors", "*.bin", "*.pth", "*.gguf", "*.pt"],
+                    ignore_patterns=ignore_patterns,
                     token=(hf_token or os.environ.get("HF_TOKEN") or "").strip() or None,
                 )
+                if pipeline_arch == "minimax_h3_image":
+                    _ensure_h3_image_text_encoder_assets(primary_dl_dir, target_id)
             elif pipeline_arch == "qwen_image_21":
                 from diffsynth.pipelines.qwen_image_21 import ModelConfig
                 proc_cfg = ModelConfig(
@@ -3916,6 +4193,9 @@ def load_model_to_vram_core(
             elif pipeline_arch == "minimax_h3":
                 # BF16 单阶段峰值约 62.1GB；在 G4 (96GB) 上可与 Qwen3.8-GGUF (~21GB) 同时共驻显存
                 required_free_gb = min(64.5, max(24.0, total_vram_gb - 5.0))
+            elif pipeline_arch == "minimax_h3_image":
+                # 135GB 全量权重走 CPU offload；DiT 单阶段峰值约 68GB，G4 (96GB) 可流畅运行
+                required_free_gb = min(72.0, max(24.0, total_vram_gb - 4.0))
             elif pipeline_arch == "transformers":
                 required_free_gb = min(max(12.0, approx_gb + 3.0), max(12.0, total_vram_gb - 1.5))
             else:
@@ -4137,6 +4417,67 @@ def load_model_to_vram_core(
                         torch_dtype=torch.bfloat16,
                     ).to("cuda")
                 mode_label = f"{spec['name']} · Diffusers BF16"
+
+            elif pipeline_arch == "minimax_h3_image":
+                MODEL_DOWNLOAD_STATE["progress"] = 0.32
+                MODEL_DOWNLOAD_STATE["message"] = f"正在装配 {spec['name']} 的本地 Diffusers 目录（4K / 6 步蒸馏）..."
+                model_dir = _h3_image_model_dir(target_id)
+                if not model_dir:
+                    raise RuntimeError(
+                        f"{spec['name']} 缺少 model_index.json，请重新点击「下载权重」同步 tokenizer / processor / configs。"
+                    )
+                # 与 MiniMax-H3 共享文本编码器，并把 model_index.json 重定向到本地，避免二次下载 66.7 GB
+                _ensure_h3_image_text_encoder_assets(model_dir, target_id)
+                _localize_minimax_h3_image_index(model_dir)
+
+                MODEL_DOWNLOAD_STATE["progress"] = 0.45
+                MODEL_DOWNLOAD_STATE["message"] = "正在装载 MiniMaxH3ImagePipeline (BF16 / CPU 智能卸载)..."
+                try:
+                    from diffusers import DiffusionPipeline
+                except ImportError as ie:
+                    raise RuntimeError(
+                        "未检测到 diffusers；请在 Colab 依赖单元执行 !pip install -q -U 'diffusers>=0.37.0' 后重试。"
+                    ) from ie
+
+                def _load_h3_image_pipeline(**kw):
+                    try:
+                        return DiffusionPipeline.from_pretrained(model_dir, **kw)
+                    except TypeError as te:
+                        # diffusers 新版本把 torch_dtype 更名为 dtype
+                        if "torch_dtype" in kw and "torch_dtype" in str(te):
+                            kw["dtype"] = kw.pop("torch_dtype")
+                            return DiffusionPipeline.from_pretrained(model_dir, **kw)
+                        raise
+
+                try:
+                    new_pipe = _load_h3_image_pipeline(torch_dtype=torch.bfloat16, local_files_only=True)
+                except Exception as e:
+                    err = str(e)
+                    if "MiniMaxH3ImagePipeline" in err or "pipeline class" in err.lower() or "not found" in err.lower():
+                        raise RuntimeError(
+                            "当前 diffusers 版本不支持 MiniMaxH3ImagePipeline；请执行 "
+                            "!pip install -q -U 'diffusers>=0.37.0' 升级后重试。"
+                        ) from e
+                    print(f"ℹ️ 严格离线装载未完成，允许自动补全配置后重试 ({e})...")
+                    new_pipe = _load_h3_image_pipeline(torch_dtype=torch.bfloat16)
+
+                total_ram_gb, avail_ram_gb = _get_system_ram_gb()
+                offload_tag = "GPU 全量常驻"
+                if total_vram_gb >= 140.0:
+                    new_pipe = new_pipe.to("cuda")
+                else:
+                    try:
+                        if avail_ram_gb >= 100.0:
+                            new_pipe.enable_model_cpu_offload(gpu_id=torch.cuda.current_device())
+                            offload_tag = "CPU 内存智能卸载"
+                        else:
+                            new_pipe.enable_sequential_cpu_offload(gpu_id=torch.cuda.current_device())
+                            offload_tag = "CPU 顺序卸载"
+                    except Exception as off_err:
+                        print(f"⚠️ CPU offload 不可用 ({off_err})，回退至 GPU 直接装载。")
+                        new_pipe = new_pipe.to("cuda")
+                        offload_tag = "GPU 直接装载"
+                mode_label = f"{spec['name']} · 4K 6步蒸馏 · {offload_tag}"
 
             elif pipeline_arch in ("qwen38_27b", "transformers"):
                 if target_id == "qwen38_27b" and free_before_gb < 49.0:
@@ -7361,6 +7702,39 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
                         img_out.save(output_path)
                         img_out = None
 
+                    elif pipeline_arch == "minimax_h3_image":
+                        filename = f"minimax_h3_image_{req.task_mode}_{timestamp}_seed{current_seed}.png"
+                        output_path = os.path.join(DEFAULT_OUTPUT_DIR, filename)
+                        w, h = int(req.width), int(req.height)
+                        gen_w, gen_h = _h3_image_effective_size(w, h)
+                        # 官方蒸馏 checkpoint 固定 6 NFE、无 CFG；CPU generator 保证 CPU offload 下种子可复现
+                        gen = torch.Generator(device="cpu").manual_seed(int(current_seed))
+                        call_kw = dict(
+                            prompt=req.visual_prompt,
+                            width=gen_w,
+                            height=gen_h,
+                            num_inference_steps=6,
+                            guidance_scale=1.0,
+                            generator=gen,
+                        )
+                        edit_imgs = (
+                            [im for im in (first_img, last_img) if im is not None]
+                            if req.task_mode == "i2i_edit" else None
+                        )
+                        out_res = _call_minimax_h3_image_pipe(active_pipe, call_kw, edit_images=edit_imgs)
+                        img_out = out_res.images[0] if hasattr(out_res, "images") else out_res
+                        if (gen_w, gen_h) != (w, h):
+                            img_out = img_out.resize(
+                                (w, h), getattr(Image, "Resampling", Image).LANCZOS
+                            )
+                        if job_cancel_event.is_set() or ABORT_GENERATION_EVENT.is_set():
+                            raise GenerationAbortedError("已手动停止当前推理任务")
+                        JOBS[job_id]["progress"] = round(base_prog + 0.96 * span_prog, 3)
+                        JOBS[job_id]["message"] = f"{prefix}正在写入 4K 无损 PNG 图像文件 (96%)..."
+                        img_out.save(output_path)
+                        img_out = None
+                        call_kw.clear()
+
                     else:
                         raise ValueError(f"未知模型 ID: {active_model_id}")
 
@@ -8363,6 +8737,8 @@ def attach_macos_api_routes(app: FastAPI):
             {"id": "Qwen/Qwen-Image-2.1", "object": "model", "created": now_ts, "owned_by": "qwen", "loaded": "qwen_image_21" in LOADED_RUNTIMES},
             {"id": "Tongyi-MAI/Z-Image-Turbo", "object": "model", "created": now_ts, "owned_by": "tongyi", "loaded": "z_image_turbo" in LOADED_RUNTIMES},
             {"id": "MiniMaxAI/MiniMax-H3", "object": "model", "created": now_ts, "owned_by": "minimax", "loaded": "minimax_h3" in LOADED_RUNTIMES},
+            {"id": "MiniMaxAI/MiniMax-H3-Image", "object": "model", "created": now_ts, "owned_by": "minimax", "loaded": "minimax_h3_image" in LOADED_RUNTIMES},
+            {"id": "minimax-h3-image", "object": "model", "created": now_ts, "owned_by": "minimax", "loaded": "minimax_h3_image" in LOADED_RUNTIMES},
         ]
         for cm in _get_custom_models_public_list():
             models_data.append({
@@ -8601,7 +8977,7 @@ def attach_macos_api_routes(app: FastAPI):
     @app.post("/v1/images/generations")
     @app.post("/images/generations")
     async def openai_images_generations(request: Request):
-        """当显存中驻留了 Qwen-Image-2.1 或 Z-Image-Turbo（可与 Qwen3.8-27B 同时共驻）时，提供标准 OpenAI 生图接口"""
+        """当显存中驻留了 Qwen-Image-2.1 / Z-Image-Turbo / MiniMax-H3-Image 时，提供标准 OpenAI 生图接口"""
         global API_REQUEST_COUNT
         auth_err = _verify_external_api_auth(request, protocol="openai")
         if auth_err:
@@ -8611,12 +8987,14 @@ def attach_macos_api_routes(app: FastAPI):
         body = await request.json()
         req_model_str = str(body.get("model") or "").lower()
         img_target_id: Optional[str] = None
-        if ("z-image" in req_model_str or "z_image" in req_model_str) and "z_image_turbo" in LOADED_RUNTIMES:
+        if ("h3-image" in req_model_str or "h3_image" in req_model_str) and "minimax_h3_image" in LOADED_RUNTIMES:
+            img_target_id = "minimax_h3_image"
+        elif ("z-image" in req_model_str or "z_image" in req_model_str) and "z_image_turbo" in LOADED_RUNTIMES:
             img_target_id = "z_image_turbo"
         elif "qwen" in req_model_str and "qwen_image_21" in LOADED_RUNTIMES:
             img_target_id = "qwen_image_21"
         else:
-            for cand in ("z_image_turbo", "qwen_image_21"):
+            for cand in ("z_image_turbo", "qwen_image_21", "minimax_h3_image"):
                 if cand in LOADED_RUNTIMES:
                     img_target_id = cand
                     break
@@ -8624,7 +9002,7 @@ def attach_macos_api_routes(app: FastAPI):
         if not img_target_id:
             return JSONResponse(
                 status_code=503,
-                content={"error": {"message": "请先在客户端加载 Qwen-Image-2.1 或 Z-Image-Turbo 至显存（可与 Qwen3.8-27B 同时常驻）。", "type": "server_error"}},
+                content={"error": {"message": "请先在客户端加载 Qwen-Image-2.1、Z-Image-Turbo 或 MiniMax-H3-Image 至显存。", "type": "server_error"}},
             )
 
         img_pipe = LOADED_RUNTIMES[img_target_id]["pipeline"]
@@ -8637,12 +9015,31 @@ def attach_macos_api_routes(app: FastAPI):
             w, h = 1024, 1024
         n = max(1, min(4, int(body.get("n", 1))))
         steps = int(body.get("steps") or (8 if img_target_id == "z_image_turbo" else 40))
+        if img_target_id == "minimax_h3_image":
+            steps = 6  # 蒸馏 checkpoint 仅支持 6 NFE、guidance_scale=1
 
         results = []
         with GPU_LOCK:
             for _ in range(n):
                 cur_seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
-                if img_target_id == "z_image_turbo":
+                if img_target_id == "minimax_h3_image":
+                    gw, gh = _h3_image_effective_size(w, h)
+                    gen = torch.Generator(device="cpu").manual_seed(cur_seed)
+                    out = _call_minimax_h3_image_pipe(
+                        img_pipe,
+                        dict(
+                            prompt=prompt,
+                            width=gw,
+                            height=gh,
+                            num_inference_steps=6,
+                            guidance_scale=1.0,
+                            generator=gen,
+                        ),
+                    )
+                    img = out.images[0] if hasattr(out, "images") else out
+                    if (gw, gh) != (w, h):
+                        img = img.resize((w, h), getattr(Image, "Resampling", Image).LANCZOS)
+                elif img_target_id == "z_image_turbo":
                     img = img_pipe(prompt=prompt, width=w, height=h, num_inference_steps=steps, seed=cur_seed, rand_device="cuda")
                 else:
                     img = img_pipe(prompt=prompt, negative_prompt=" ", width=w, height=h, num_inference_steps=steps, seed=cur_seed)
@@ -9302,14 +9699,14 @@ CUSTOM_CSS = """
 WEBUI_HEADER_ZH = """
 <div class="header-banner">
     <h1>⚡ EasyColab · Google Colab 多模态 AI 推理与生成服务端</h1>
-    <p>支持 <b>ComfyUI 节点工作台 (云盘软链持久化) · MiniMax-H3 · Qwen3.8-27B (GGUF+MTP / BF16) · Qwen-Image-2.1 · Z-Image-Turbo</b> · 自动关机看门狗</p>
+    <p>支持 <b>ComfyUI 节点工作台 (云盘软链持久化) · MiniMax-H3 / MiniMax-H3-Image (4K) · Qwen3.8-27B (GGUF+MTP / BF16) · Qwen-Image-2.1 · Z-Image-Turbo</b> · 自动关机看门狗</p>
 </div>
 """
 
 WEBUI_HEADER_EN = """
 <div class="header-banner">
     <h1>⚡ EasyColab · Google Colab Multimodal AI Inference & Generation Server</h1>
-    <p>Supports <b>ComfyUI Node Studio (Google Drive Persistence) · MiniMax-H3 · Qwen3.8-27B (GGUF+MTP / BF16) · Qwen-Image-2.1 · Z-Image-Turbo</b> · Idle Auto-Shutdown Watchdog</p>
+    <p>Supports <b>ComfyUI Node Studio (Google Drive Persistence) · MiniMax-H3 / MiniMax-H3-Image (4K) · Qwen3.8-27B (GGUF+MTP / BF16) · Qwen-Image-2.1 · Z-Image-Turbo</b> · Idle Auto-Shutdown Watchdog</p>
 </div>
 """
 

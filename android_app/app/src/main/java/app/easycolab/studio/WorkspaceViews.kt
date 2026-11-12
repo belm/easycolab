@@ -1269,7 +1269,7 @@ private fun VideoAndImageWorkspaceSection(vm: StudioViewModel) {
 
                     AnimatedVisibility(visible = showAdvancedParams) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            val resList = if (isVideo) VIDEO_RESOLUTIONS else IMAGE_RESOLUTIONS
+                            val resList = if (isVideo) VIDEO_RESOLUTIONS else imageResolutionsFor(vm.selectedModelId)
                             val currentRes = if (isVideo) vm.selectedVideoResolution else vm.selectedImageResolution
 
                             Text(

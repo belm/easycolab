@@ -1464,7 +1464,7 @@ struct MainStudioView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Picker(L("画幅", "Resolution"), selection: $vm.selectedImageResolution) {
-                    ForEach(IMAGE_RESOLUTIONS) { opt in
+                    ForEach(imageResolutions(forModelId: vm.selectedModelId)) { opt in
                         Text(opt.label).tag(opt)
                     }
                 }

@@ -371,6 +371,31 @@ val OPEN_MODEL_CATALOG: List<OpenModelSpec> = listOf(
         defaultFiles = (1..18).map { ModelFileItem(String.format(Locale.US, "model-%05d-of-00018.safetensors", it), "权重分片 $it/18") }
     ),
     OpenModelSpec(
+        id = "minimax_h3_image",
+        nameZh = "MiniMax-H3-Image (4K)",
+        nameEn = "MiniMax-H3-Image (4K)",
+        shortTitleZh = "H3-Image 4K",
+        shortTitleEn = "H3-Image 4K",
+        repoId = "MiniMaxAI/MiniMax-H3-Image",
+        badgeZh = "4K 直出 · 6 步蒸馏 · 135 GB",
+        badgeEn = "Native 4K · 6-Step · 135 GB",
+        summaryZh = "MiniMax H3 家族开源 4K 图像模型，支持文生图与最多 16 张参考图编辑，6 步极速采样",
+        summaryEn = "Open-weight 4K image model from the H3 family: text-to-image & multi-reference editing in 6 steps",
+        approxSizeGb = 135.4,
+        modality = ModelModality.IMAGE,
+        defaultSteps = 6f,
+        modes = listOf(
+            TaskModeItem("t2i", "4K 高清文生图", "4K Text-to-Image", "1600 万像素 4K 原生直出，照片级细节与精准构图", "Native 16MP 4K output with photoreal detail"),
+            TaskModeItem("i2i_edit", "多参考图指令编辑", "Multi-Reference Edit", "上传 1~2 张参考图，用自然语言改局部、换背景或融合主体", "Upload 1-2 references to edit or fuse subjects via natural language")
+        ),
+        defaultFiles = (1..12).map { ModelFileItem(String.format(Locale.US, "transformer/model-%05d-of-00012.safetensors", it), "DiT $it/12") }
+            + (1..14).map { ModelFileItem(String.format(Locale.US, "text_encoder/model-%05d-of-00014.safetensors", it), "编码器 $it/14") }
+            + listOf(
+                ModelFileItem("vae/diffusion_pytorch_model.safetensors", "4K 图像 VAE"),
+                ModelFileItem("pdd_fused_heads.safetensors", "PDD 融合输出头")
+            )
+    ),
+    OpenModelSpec(
         id = "comfyui_studio",
         nameZh = "ComfyUI 节点工作台",
         nameEn = "ComfyUI Node Studio",
@@ -416,6 +441,18 @@ val IMAGE_RESOLUTIONS: List<ResolutionOption> = listOf(
     ResolutionOption("i_1344_768", "1344 × 768 (16:9 电影横幅)", "1344 × 768 (16:9 Cinematic Widescreen)", 1344, 768),
     ResolutionOption("i_1536_1024", "1536 × 1024 (3:2 单反摄影)", "1536 × 1024 (3:2 DSLR Photo)", 1536, 1024)
 )
+
+val H3_IMAGE_RESOLUTIONS: List<ResolutionOption> = listOf(
+    ResolutionOption("h3_4096_4096", "4096 × 4096 (1:1 4K 方图 · 推荐)", "4096 × 4096 (1:1 4K Square · Recommended)", 4096, 4096),
+    ResolutionOption("h3_4736_3552", "4736 × 3552 (4:3 4K 横图)", "4736 × 3552 (4:3 4K Landscape)", 4736, 3552),
+    ResolutionOption("h3_3552_4736", "3552 × 4736 (3:4 4K 竖图)", "3552 × 4736 (3:4 4K Portrait)", 3552, 4736),
+    ResolutionOption("h3_5472_3072", "5472 × 3072 (16:9 4K 宽屏)", "5472 × 3072 (16:9 4K Widescreen)", 5472, 3072),
+    ResolutionOption("h3_3072_5472", "3072 × 5472 (9:16 4K 竖屏)", "3072 × 5472 (9:16 4K Portrait)", 3072, 5472),
+    ResolutionOption("h3_6272_2688", "6272 × 2688 (21:9 4K 超宽)", "6272 × 2688 (21:9 4K Ultra-wide)", 6272, 2688)
+)
+
+fun imageResolutionsFor(modelId: String): List<ResolutionOption> =
+    if (modelId == "minimax_h3_image") H3_IMAGE_RESOLUTIONS else IMAGE_RESOLUTIONS
 
 data class PresetTemplate(
     val id: String,

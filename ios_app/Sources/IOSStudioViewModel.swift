@@ -777,6 +777,10 @@ final class IOSStudioViewModel: ObservableObject {
         guard selectedModelId != spec.id else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         selectedModelId = spec.id
+        let resList = imageResolutions(forModelId: spec.id)
+        if spec.modality == .image && !resList.contains(selectedImageResolution) {
+            selectedImageResolution = resList[0]
+        }
         taskModeId = spec.modes[0].id
         inferenceSteps = spec.defaultSteps
         modelFiles = spec.defaultFiles

@@ -23,7 +23,7 @@ struct IOSOnboardingSheet: View {
                         icon: "shippingbox.and.arrow.backward.fill",
                         tint: .blue,
                         title: L("2. 四大旗舰开源引擎 & 自定义 HF 导入", "2. 4 Flagship Engines & Custom HF Import"),
-                        desc: L("内置 MiniMax-H3 立体声有声视频、Qwen-Image-2.1 与 Z-Image-Turbo 海报修图、Qwen3.8-27B 256K 视觉推理 + API 网关及 ComfyUI 云盘持久化，更支持输入任意 HuggingFace Repo ID 一键导入。", "Built-in MiniMax-H3 stereo audio-video, Qwen-Image-2.1 & Z-Image-Turbo, Qwen3.8-27B 256K vision chat + API, Drive-persisted ComfyUI, plus 1-click custom HuggingFace repo import.")
+                        desc: L("内置 MiniMax-H3 立体声有声视频、MiniMax-H3-Image 4K 直出、Qwen-Image-2.1 与 Z-Image-Turbo 海报修图、Qwen3.8-27B 256K 视觉推理 + API 网关及 ComfyUI 云盘持久化，更支持输入任意 HuggingFace Repo ID 一键导入。", "Built-in MiniMax-H3 stereo audio-video, MiniMax-H3-Image 4K, Qwen-Image-2.1 & Z-Image-Turbo, Qwen3.8-27B 256K vision chat + API, Drive-persisted ComfyUI, plus 1-click custom HuggingFace repo import.")
                     )
                     .tag(1)
 

@@ -554,7 +554,7 @@ struct CreateTabView: View {
                                 .fixedSize(horizontal: true, vertical: false)
                             Spacer(minLength: 6)
                             Menu {
-                                ForEach(IMAGE_RESOLUTIONS) { r in
+                                ForEach(imageResolutions(forModelId: vm.selectedModelId)) { r in
                                     Button {
                                         vm.selectedImageResolution = r
                                     } label: {
