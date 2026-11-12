@@ -3407,7 +3407,7 @@ def _extract_h3_image_result(out):
         return out
 
 
-def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = "") -> Tuple[bool, str]:
+def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = "", storage_target: str = "auto") -> Tuple[bool, str]:
     global SELECTED_MODEL_ID
     touch_activity()
     if MODEL_DOWNLOAD_STATE["is_downloading"]:
@@ -3445,8 +3445,23 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
             except Exception:
                 drive_has_space = False
 
-        primary_dl_dir = ram_dir if ram_dir else (drive_dir if (DRIVE_MOUNTED and drive_has_space) else nvme_dir)
+        # 存储位置：用户可在客户端选择 auto / drive / local
+        storage_target = (storage_target or "auto").strip().lower()
+        if storage_target not in ("auto", "drive", "local"):
+            storage_target = "auto"
+
+        if storage_target == "drive":
+            if not DRIVE_MOUNTED:
+                return False, "已选择「存储到 Google Drive」，但当前 Colab 未挂载 Drive。请先在 notebook 挂载 Google Drive，或改选「实例本地磁盘」。"
+            if not drive_has_space:
+                return False, f"已选择「存储到 Google Drive」，但 Drive 剩余空间不足（需 {spec['approx_size_gb']:.1f} GB）。请清理云盘空间或改选「实例本地磁盘」。"
+            primary_dl_dir = drive_dir
+        elif storage_target == "local":
+            primary_dl_dir = nvme_dir
+        else:  # auto
+            primary_dl_dir = ram_dir if ram_dir else (drive_dir if (DRIVE_MOUNTED and drive_has_space) else nvme_dir)
         os.makedirs(primary_dl_dir, exist_ok=True)
+        print(f"📦 存储位置: {storage_target} -> {primary_dl_dir}")
         total_files = len(req_files)
         pipeline_arch = spec.get("pipeline_arch") or target_id
 
@@ -7129,6 +7144,8 @@ class DownloadModelRequest(BaseModel):
     include_pattern: str = ""
     custom_name: str = ""
     modality: str = "auto"
+    # 存储位置：auto（自动：Drive 可用则用 Drive）/ drive（强制 Google Drive）/ local（强制实例本地）
+    storage_target: str = "auto"
 
 
 class OrphanWeightsRequest(BaseModel):

@@ -1017,6 +1017,59 @@ struct MainStudioView: View {
                         .monospacedDigit()
                 }
 
+                // 存储位置选择（权重下载到 Drive 还是本地）
+                HStack {
+                    Text(L("存储位置", "Storage"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { vm.storageTarget },
+                        set: { vm.storageTarget = $0 }
+                    )) {
+                        Text(L("自动", "Auto")).tag("auto")
+                        Text(L("Google Drive", "Google Drive")).tag("drive")
+                        Text(L("本地磁盘", "Local Disk")).tag("local")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    .frame(maxWidth: 150)
+                    .help(L("选择权重下载位置。Google Drive 可跨实例持久化；本地磁盘重开 Colab 会丢失。",
+                             "Where to store weights. Google Drive persists across instances; local disk is lost when Colab restarts."))
+                }
+
+                // 持久化状态提示
+                HStack(spacing: 4) {
+                    if vm.storageTarget == "drive" {
+                        Image(systemName: vm.drivePersisted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(vm.drivePersisted ? Color.green : Color.orange)
+                        Text(vm.drivePersisted
+                             ? L("已存云盘，重启免重下", "On Drive · persists across restarts")
+                             : L("Drive 未挂载，将无法持久化", "Drive not mounted · cannot persist"))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(vm.drivePersisted ? Color.green : Color.orange)
+                    } else if vm.storageTarget == "local" {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.orange)
+                        Text(L("存本地，重开 Colab 需重下", "Local disk · re-download after Colab restart"))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Color.orange)
+                    } else {
+                        Image(systemName: vm.drivePersisted ? "checkmark.circle.fill" : "info.circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(vm.drivePersisted ? Color.green : Color.secondary)
+                        Text(vm.drivePersisted
+                             ? L("自动：将存 Google Drive（持久化）", "Auto: will use Google Drive")
+                             : L("自动：Drive 不可用，将存本地", "Auto: Drive unavailable, will use local disk"))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
                 DisclosureGroup(
                     L("查看权重分片 (\(vm.modelFiles.count))", "View Weight Shards (\(vm.modelFiles.count))"),
                     isExpanded: $showFileList

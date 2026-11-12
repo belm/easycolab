@@ -238,6 +238,10 @@ class StudioViewModel: ObservableObject {
     @Published var idleRemainingSeconds: Int = 1800
     var remoteIdleSynced: Bool = false
     @Published var drivePersisted: Bool = false
+    /// 权重存储位置偏好：auto（自动）/ drive（强制云盘）/ local（强制本地）
+    @Published var storageTarget: String = UserDefaults.standard.string(forKey: "easycolab.storageTarget") ?? "auto" {
+        didSet { UserDefaults.standard.set(storageTarget, forKey: "easycolab.storageTarget") }
+    }
     @Published var bf16ShardsCount: Int = 0
     @Published var liveConsoleLines: [String] = (
         LanguageManager.shared.isEN ? StudioViewModel.defaultWelcomeLinesEn : StudioViewModel.defaultWelcomeLinesZh
@@ -943,6 +947,14 @@ class StudioViewModel: ObservableObject {
             return
         }
 
+        // 若选择了 Drive 但未挂载，提前提示（服务端也会二次校验）
+        if storageTarget == "drive" && !drivePersisted {
+            statusMessage = L(
+                "已选择「存储到 Google Drive」，但当前未检测到 Drive 挂载。请先挂载 Google Drive，或在模型卡片「存储位置」改选「自动/本地磁盘」。",
+                "Storage is set to Google Drive, but Drive is not mounted. Mount Drive first, or switch Storage to Auto/Local."
+            )
+            return
+        }
         let targetModel = selectedModelId
         isDownloadingWeights = true
         modelTaskProgress = 0.05
@@ -960,7 +972,8 @@ class StudioViewModel: ObservableObject {
                 "hf_token": hfToken,
                 "repo_id": activeModelSpec.isCustom ? activeModelSpec.repoId : "",
                 "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
-                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
+                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : "",
+                "storage_target": storageTarget
             ])
             let (data, _) = try await adminSession.data(for: req)
             let decoded = try JSONDecoder().decode(ColabStatusResponse.self, from: data)
