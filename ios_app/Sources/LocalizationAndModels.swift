@@ -576,10 +576,10 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
                 icon: "wand.and.rays"
             )
         ],
-        defaultFiles: (1...12).map { ModelFileItem(name: String(format: "transformer/model-%05d-of-00012.safetensors", $0), desc: "DiT \($0)/12", exists: false, size_gb: 0) }
+        defaultFiles: (1...12).map { ModelFileItem(name: String(format: "transformer_diffusers/diffusion_pytorch_model-%05d-of-00012.safetensors", $0), desc: "DiT \($0)/12", exists: false, size_gb: 0) }
             + (1...14).map { ModelFileItem(name: String(format: "text_encoder/model-%05d-of-00014.safetensors", $0), desc: "编码器 \($0)/14", exists: false, size_gb: 0) }
             + [
-                ModelFileItem(name: "vae/diffusion_pytorch_model.safetensors", desc: "4K 图像 VAE", exists: false, size_gb: 0),
+                ModelFileItem(name: "vae_diffusers/diffusion_pytorch_model.safetensors", desc: "4K 图像 VAE", exists: false, size_gb: 0),
                 ModelFileItem(name: "pdd_fused_heads.safetensors", desc: "PDD 融合输出头", exists: false, size_gb: 0)
             ]
     ),

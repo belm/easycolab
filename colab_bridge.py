@@ -625,7 +625,7 @@ if os.path.exists(os.path.expanduser("~/.config/rclone/rclone.conf")):
 if not os.path.exists("/content/DiffSynth-Studio"):
     print("正在克隆 DiffSynth-Studio...", flush=True)
     subprocess.run(["git", "clone", "--depth", "1", "https://github.com/modelscope/DiffSynth-Studio.git", "/content/DiffSynth-Studio"], check=True)
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "transformers", "accelerate", "bitsandbytes", "huggingface_hub", "hf_transfer", "qwen-vl-utils", "einops", "kernels>=0.17.2,<0.18.0", "diffusers>=0.37.0", "av", "gradio", "modelscope", "imageio", "imageio-ffmpeg", "scipy", "soundfile", "librosa"], check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "transformers", "accelerate", "bitsandbytes", "huggingface_hub", "hf_transfer", "qwen-vl-utils", "einops", "kernels>=0.17.2,<0.18.0", "git+https://github.com/huggingface/diffusers.git", "av", "gradio", "modelscope", "imageio", "imageio-ffmpeg", "scipy", "soundfile", "librosa"], check=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "fla-core", "flash-linear-attention"], check=False)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "--only-binary=:all:", "causal-conv1d"], check=False)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "/content/DiffSynth-Studio"], check=True)
@@ -637,15 +637,13 @@ else:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "einops", "kernels>=0.17.2,<0.18.0"], check=False)
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "--force-reinstall", "fla-core", "flash-linear-attention"], check=False)
 
-# 1b. MiniMax-H3-Image 依赖 diffusers >= 0.37.0 的 MiniMaxH3ImagePipeline（老环境自动补齐）
+# 1b. MiniMax-H3-Image 依赖 diffusers GitHub main 的 ModularPipeline（老环境自动补齐）
 try:
-    import importlib.metadata as _ec_md
-    _ec_dv = _ec_md.version("diffusers")
-    if tuple(int(_x) for _x in _ec_dv.split(".")[:2] if _x.isdigit()) < (0, 37):
-        raise ValueError(_ec_dv)
+    from diffusers import ComponentsManager, ModularPipeline  # noqa: F401
+    from diffusers.modular_pipelines.minimax_h3_image import MiniMaxH3ImageModularPipeline  # noqa: F401
 except Exception:
-    print("正在升级 diffusers 以支持 MiniMax-H3-Image (4K)...", flush=True)
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "diffusers>=0.37.0"], check=False)
+    print("正在安装 diffusers GitHub main 以支持 MiniMax-H3-Image (4K)...", flush=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "git+https://github.com/huggingface/diffusers.git"], check=False)
 
 # 2. 检查是否已有运行中的 app.py 或 llama-server，先清理旧进程释放 GPU 显存
 subprocess.run(["pkill", "-f", "python.*/content/app.py"], check=False)

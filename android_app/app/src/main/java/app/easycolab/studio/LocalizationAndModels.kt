@@ -388,10 +388,10 @@ val OPEN_MODEL_CATALOG: List<OpenModelSpec> = listOf(
             TaskModeItem("t2i", "4K 高清文生图", "4K Text-to-Image", "1600 万像素 4K 原生直出，照片级细节与精准构图", "Native 16MP 4K output with photoreal detail"),
             TaskModeItem("i2i_edit", "多参考图指令编辑", "Multi-Reference Edit", "上传 1~2 张参考图，用自然语言改局部、换背景或融合主体", "Upload 1-2 references to edit or fuse subjects via natural language")
         ),
-        defaultFiles = (1..12).map { ModelFileItem(String.format(Locale.US, "transformer/model-%05d-of-00012.safetensors", it), "DiT $it/12") }
+        defaultFiles = (1..12).map { ModelFileItem(String.format(Locale.US, "transformer_diffusers/diffusion_pytorch_model-%05d-of-00012.safetensors", it), "DiT $it/12") }
             + (1..14).map { ModelFileItem(String.format(Locale.US, "text_encoder/model-%05d-of-00014.safetensors", it), "编码器 $it/14") }
             + listOf(
-                ModelFileItem("vae/diffusion_pytorch_model.safetensors", "4K 图像 VAE"),
+                ModelFileItem("vae_diffusers/diffusion_pytorch_model.safetensors", "4K 图像 VAE"),
                 ModelFileItem("pdd_fused_heads.safetensors", "PDD 融合输出头")
             )
     ),

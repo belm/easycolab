@@ -1323,19 +1323,20 @@ MINIMAX_H3_BF16_FILES = (
 # MiniMax-H3-Image: 基于 H3 的 4K / 1600 万像素图像生成与多参考图编辑模型
 #   - 33.1B DiT (12 分片 BF16) + 图像 VAE (FP32) + 6 步 PDD 蒸馏融合输出头
 #   - 文本编码器与 MiniMax-H3 的 Qwen3-VL 完全一致（14 分片，blob 校验相同），可跨模型直接复用
-#   - 推理走 diffusers 的 MiniMaxH3ImagePipeline（model_index.json, diffusers >= 0.37.0）
+#   - 官方以 Modular Diffusers 形式集成（MiniMaxH3ImageModularPipeline + ComponentsManager），
+#     需 diffusers GitHub main 源码，且权重目录为 transformer_diffusers/ 与 vae_diffusers/
 MINIMAX_H3_IMAGE_TEXT_ENCODER_FILES = [
     (f"text_encoder/model-{i:05d}-of-00014.safetensors", f"Qwen3-VL 文本编码器 BF16 {i}/14 (与 MiniMax-H3 共用)")
     for i in range(1, 15)
 ]
 MINIMAX_H3_IMAGE_FILES = (
     [
-        (f"transformer/model-{i:05d}-of-00012.safetensors", f"H3-Image 33B DiT 主干 BF16 {i}/12")
+        (f"transformer_diffusers/diffusion_pytorch_model-{i:05d}-of-00012.safetensors", f"H3-Image 33B DiT 主干 BF16 {i}/12 (Modular Diffusers)")
         for i in range(1, 13)
     ]
     + MINIMAX_H3_IMAGE_TEXT_ENCODER_FILES
     + [
-        ("vae/diffusion_pytorch_model.safetensors", "4K 图像 VAE 解码器 FP32 (约 2.34 GB)"),
+        ("vae_diffusers/diffusion_pytorch_model.safetensors", "4K 图像 VAE 解码器 FP32 (Modular Diffusers, 约 2.34 GB)"),
         ("pdd_fused_heads.safetensors", "6 步 PDD 蒸馏融合输出头 (约 12 MB)"),
     ]
 )
@@ -3195,34 +3196,40 @@ def _download_h3_image_weight(repo_id: str, filename: str, dest_dir: str, hf_tok
 
 
 def _h3_image_model_dir(target_id: str) -> Optional[str]:
-    """定位包含 model_index.json 的 H3-Image 顶层模型目录"""
+    """定位包含 modular_model_index.json / model_index.json 的 H3-Image 顶层模型目录"""
     ram_dir, nvme_dir, drive_dir = _get_model_dirs(target_id)
     for d in (ram_dir, nvme_dir, drive_dir):
-        if d and os.path.exists(os.path.join(d, "model_index.json")):
+        if d and (
+            os.path.exists(os.path.join(d, "modular_model_index.json"))
+            or os.path.exists(os.path.join(d, "model_index.json"))
+        ):
             return d
-    first = _find_existing_model_file(target_id, "transformer/model-00001-of-00012.safetensors")
+    first = _find_existing_model_file(
+        target_id, "transformer_diffusers/diffusion_pytorch_model-00001-of-00012.safetensors"
+    )
     if first:
         root = os.path.dirname(os.path.dirname(first))
-        if os.path.exists(os.path.join(root, "model_index.json")):
+        if os.path.exists(os.path.join(root, "modular_model_index.json")):
             return root
     return None
 
 
-def _localize_minimax_h3_image_index(model_dir: str) -> None:
-    """把 model_index.json 里 text_encoder 的外部仓库引用改写为本地目录，避免运行时联网二次下载"""
-    idx_path = os.path.join(model_dir, "model_index.json")
+def _localize_h3_image_index_file(idx_path: str, model_dir: str) -> bool:
+    """把 index 里各组件指向 HuggingFace 仓库的引用改写成本地目录，避免运行时联网二次下载"""
     if not os.path.exists(idx_path):
-        raise RuntimeError("未找到 model_index.json，请先点击「下载权重」拉取模型配置文件。")
+        return False
     with open(idx_path, "r", encoding="utf-8") as f:
         idx = json.load(f)
-    te = idx.get("text_encoder")
-    if not (isinstance(te, list) and len(te) >= 3 and isinstance(te[2], dict)):
-        return
-    cfg = te[2]
-    if cfg.get("pretrained_model_name_or_path") == model_dir and cfg.get("subfolder") == "text_encoder":
-        return
-    cfg["pretrained_model_name_or_path"] = model_dir
-    cfg["subfolder"] = "text_encoder"
+    changed = False
+    for key, val in idx.items():
+        if key.startswith("_") or not isinstance(val, list) or len(val) < 3 or not isinstance(val[2], dict):
+            continue
+        cfg = val[2]
+        if "pretrained_model_name_or_path" in cfg and cfg["pretrained_model_name_or_path"] != model_dir:
+            cfg["pretrained_model_name_or_path"] = model_dir
+            changed = True
+    if not changed:
+        return False
     backup = idx_path + ".easycolab_orig"
     if not os.path.exists(backup):
         try:
@@ -3231,7 +3238,18 @@ def _localize_minimax_h3_image_index(model_dir: str) -> None:
             pass
     with open(idx_path, "w", encoding="utf-8") as f:
         json.dump(idx, f, ensure_ascii=False, indent=2)
-    print(f"ℹ️ 已将 {model_dir}/model_index.json 的 text_encoder 重定向至本地权重目录（免重复下载 66.7 GB）。")
+    print(f"ℹ️ 已将 {os.path.basename(idx_path)} 的组件引用重定向至本地权重目录 {model_dir}。")
+    return True
+
+
+def _localize_minimax_h3_image_index(model_dir: str) -> None:
+    """本地化 modular_model_index.json（主路径）与 model_index.json（兼容路径）"""
+    modular_idx = os.path.join(model_dir, "modular_model_index.json")
+    model_idx = os.path.join(model_dir, "model_index.json")
+    done = _localize_h3_image_index_file(modular_idx, model_dir)
+    done = _localize_h3_image_index_file(model_idx, model_dir) or done
+    if not done and not os.path.exists(modular_idx) and not os.path.exists(model_idx):
+        raise RuntimeError("未找到 modular_model_index.json / model_index.json，请先点击「下载权重」同步配置文件。")
 
 
 def _h3_image_effective_size(width: int, height: int) -> Tuple[int, int]:
@@ -3259,23 +3277,67 @@ def _filter_diffusers_call_kwargs(pipe, kwargs: dict) -> dict:
 
 
 def _call_minimax_h3_image_pipe(pipe, kwargs: dict, edit_images=None):
-    """调用 MiniMaxH3ImagePipeline；自动适配参考图参数名（image / reference_images / edit_image）"""
+    """调用 H3-Image 管线；兼容 ModularPipeline (output="images"、固定 6 步/无 CFG)
+    与标准 Diffusers 管线（num_inference_steps / guidance_scale）。"""
     import inspect
     try:
         params = inspect.signature(pipe.__call__).parameters
     except (TypeError, ValueError):
         params = {}
-    base = _filter_diffusers_call_kwargs(pipe, kwargs)
+    accepts_any = (not params) or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    base = dict(kwargs)
     if edit_images:
-        accepts_any = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-        if accepts_any:
-            base["image"] = edit_images
-        else:
-            for key in ("image", "reference_images", "edit_image", "input_images"):
-                if key in params:
-                    base[key] = edit_images
-                    break
-    return pipe(**base)
+        for key in ("image", "reference_images", "edit_image", "input_images"):
+            if accepts_any or key in params:
+                base[key] = edit_images
+                break
+    if not accepts_any:
+        base = {k: v for k, v in base.items() if k in params}
+
+    attempts = [base]
+    # 部分版本不接受 output= 关键字
+    if "output" in base:
+        attempts.append({k: v for k, v in base.items() if k != "output"})
+    # 标准 Diffusers 管线回退：把步数/CFG 补回去
+    if "num_inference_steps" not in base:
+        fallback = {k: v for k, v in base.items() if k != "output"}
+        fallback["num_inference_steps"] = int(kwargs.get("num_inference_steps", 6))
+        fallback["guidance_scale"] = float(kwargs.get("guidance_scale", 1.0))
+        if not accepts_any:
+            fallback = {k: v for k, v in fallback.items() if k in params}
+        attempts.append(fallback)
+
+    last_err = None
+    for attempt in attempts:
+        try:
+            return pipe(**attempt)
+        except TypeError as e:
+            msg = str(e)
+            if "unexpected keyword" in msg or "got an unexpected" in msg or "required" in msg:
+                print(f"ℹ️ H3-Image 管线参数不兼容，尝试下一组参数: {e}")
+                last_err = e
+                continue
+            raise
+    raise last_err or RuntimeError("H3-Image 管线调用失败")
+
+
+def _extract_h3_image_result(out):
+    """兼容 ModularPipeline 返回的 State/list、标准 ImagePipelineOutput 与裸 PIL.Image"""
+    if hasattr(out, "images"):
+        imgs = out.images
+        return imgs[0] if isinstance(imgs, (list, tuple)) else imgs
+    if isinstance(out, dict):
+        imgs = out.get("images")
+        if imgs is not None:
+            return imgs[0] if isinstance(imgs, (list, tuple)) else imgs
+    if isinstance(out, (list, tuple)):
+        first = out[0]
+        return first[0] if isinstance(first, (list, tuple)) else first
+    try:
+        return out[0]
+    except Exception:
+        return out
 
 
 def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = "") -> Tuple[bool, str]:
@@ -4420,63 +4482,94 @@ def load_model_to_vram_core(
 
             elif pipeline_arch == "minimax_h3_image":
                 MODEL_DOWNLOAD_STATE["progress"] = 0.32
-                MODEL_DOWNLOAD_STATE["message"] = f"正在装配 {spec['name']} 的本地 Diffusers 目录（4K / 6 步蒸馏）..."
+                MODEL_DOWNLOAD_STATE["message"] = f"正在装配 {spec['name']} 的本地 Modular Diffusers 目录..."
                 model_dir = _h3_image_model_dir(target_id)
                 if not model_dir:
                     raise RuntimeError(
-                        f"{spec['name']} 缺少 model_index.json，请重新点击「下载权重」同步 tokenizer / processor / configs。"
+                        f"{spec['name']} 缺少 modular_model_index.json，请重新点击「下载权重」同步配置文件。"
                     )
-                # 与 MiniMax-H3 共享文本编码器，并把 model_index.json 重定向到本地，避免二次下载 66.7 GB
+                # 复用 MiniMax-H3 文本编码器，并把 index 内所有组件引用改成本地目录（免联网二次下载）
                 _ensure_h3_image_text_encoder_assets(model_dir, target_id)
                 _localize_minimax_h3_image_index(model_dir)
 
                 MODEL_DOWNLOAD_STATE["progress"] = 0.45
-                MODEL_DOWNLOAD_STATE["message"] = "正在装载 MiniMaxH3ImagePipeline (BF16 / CPU 智能卸载)..."
+                MODEL_DOWNLOAD_STATE["message"] = "正在装载 MiniMaxH3ImageModularPipeline (BF16 / 自动 CPU 卸载)..."
                 try:
-                    from diffusers import DiffusionPipeline
+                    from diffusers import ComponentsManager, ModularPipeline
                 except ImportError as ie:
                     raise RuntimeError(
-                        "未检测到 diffusers；请在 Colab 依赖单元执行 !pip install -q -U 'diffusers>=0.37.0' 后重试。"
+                        "未检测到 diffusers 的 ModularPipeline；请在 Colab 依赖单元执行 "
+                        '!pip install -q -U "git+https://github.com/huggingface/diffusers.git" 后重试。'
+                    ) from ie
+                try:
+                    from diffusers.modular_pipelines.minimax_h3_image import MiniMaxH3ImageModularPipeline  # noqa: F401
+                except ImportError as ie:
+                    raise RuntimeError(
+                        "当前 diffusers 不含 MiniMaxH3ImageModularPipeline；请安装 diffusers GitHub main："
+                        '!pip install -q -U "git+https://github.com/huggingface/diffusers.git"'
                     ) from ie
 
-                def _load_h3_image_pipeline(**kw):
-                    try:
-                        return DiffusionPipeline.from_pretrained(model_dir, **kw)
-                    except TypeError as te:
-                        # diffusers 新版本把 torch_dtype 更名为 dtype
-                        if "torch_dtype" in kw and "torch_dtype" in str(te):
-                            kw["dtype"] = kw.pop("torch_dtype")
-                            return DiffusionPipeline.from_pretrained(model_dir, **kw)
-                        raise
+                last_err: Optional[Exception] = None
+                used_manager = [False]
 
-                try:
-                    new_pipe = _load_h3_image_pipeline(torch_dtype=torch.bfloat16, local_files_only=True)
-                except Exception as e:
-                    err = str(e)
-                    if "MiniMaxH3ImagePipeline" in err or "pipeline class" in err.lower() or "not found" in err.lower():
-                        raise RuntimeError(
-                            "当前 diffusers 版本不支持 MiniMaxH3ImagePipeline；请执行 "
-                            "!pip install -q -U 'diffusers>=0.37.0' 升级后重试。"
-                        ) from e
-                    print(f"ℹ️ 严格离线装载未完成，允许自动补全配置后重试 ({e})...")
-                    new_pipe = _load_h3_image_pipeline(torch_dtype=torch.bfloat16)
-
-                total_ram_gb, avail_ram_gb = _get_system_ram_gb()
-                offload_tag = "GPU 全量常驻"
-                if total_vram_gb >= 140.0:
-                    new_pipe = new_pipe.to("cuda")
-                else:
+                def _try_load(label: str, fn):
+                    nonlocal last_err
                     try:
-                        if avail_ram_gb >= 100.0:
-                            new_pipe.enable_model_cpu_offload(gpu_id=torch.cuda.current_device())
-                            offload_tag = "CPU 内存智能卸载"
-                        else:
-                            new_pipe.enable_sequential_cpu_offload(gpu_id=torch.cuda.current_device())
-                            offload_tag = "CPU 顺序卸载"
+                        pipe = fn()
+                        print(f"✅ H3-Image 管线装载成功（{label}）")
+                        return pipe
+                    except Exception as e:
+                        last_err = e
+                        # 把原始异常完整写入服务端日志，便于在客户端控制台看到真实堆栈
+                        print(f"⚠️ H3-Image 装载尝试 [{label}] 失败: {type(e).__name__}: {e}")
+                        return None
+
+                def _load_components_compat(p):
+                    try:
+                        p.load_components(dtype=torch.bfloat16)
+                    except TypeError:
+                        p.load_components(torch_dtype=torch.bfloat16)
+
+                def _modular_with_manager():
+                    manager = ComponentsManager()
+                    try:
+                        manager.enable_auto_cpu_offload(device="cuda")
+                        used_manager[0] = True
                     except Exception as off_err:
-                        print(f"⚠️ CPU offload 不可用 ({off_err})，回退至 GPU 直接装载。")
-                        new_pipe = new_pipe.to("cuda")
-                        offload_tag = "GPU 直接装载"
+                        print(f"⚠️ ComponentsManager 自动卸载不可用 ({off_err})，继续以普通方式装载。")
+                    p = ModularPipeline.from_pretrained(model_dir, components_manager=manager)
+                    _load_components_compat(p)
+                    return p
+
+                def _modular_plain():
+                    used_manager[0] = False
+                    p = ModularPipeline.from_pretrained(model_dir)
+                    _load_components_compat(p)
+                    return p
+
+                def _diffusers_standard():
+                    used_manager[0] = False
+                    from diffusers import DiffusionPipeline
+                    p = DiffusionPipeline.from_pretrained(model_dir, torch_dtype=torch.bfloat16)
+                    p.enable_model_cpu_offload(gpu_id=torch.cuda.current_device())
+                    return p
+
+                for label, fn in (
+                    ("ModularPipeline + ComponentsManager 自动 CPU 卸载", _modular_with_manager),
+                    ("ModularPipeline 本地目录", _modular_plain),
+                    ("DiffusionPipeline 兼容回退", _diffusers_standard),
+                ):
+                    new_pipe = _try_load(label, fn)
+                    if new_pipe is not None:
+                        break
+
+                if new_pipe is None:
+                    raise RuntimeError(
+                        f"{spec['name']} 管线装载失败（3 种方式均未成功）。请确认 Colab 已安装 diffusers GitHub main："
+                        '!pip install -q -U "git+https://github.com/huggingface/diffusers.git"，'
+                        f"并重新点击「下载权重」补齐 transformer_diffusers / vae_diffusers 分片。原始错误: {last_err}"
+                    )
+                offload_tag = "ComponentsManager 自动卸载" if used_manager[0] else "本地管线"
                 mode_label = f"{spec['name']} · 4K 6步蒸馏 · {offload_tag}"
 
             elif pipeline_arch in ("qwen38_27b", "transformers"):
@@ -7706,27 +7799,21 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
                         filename = f"minimax_h3_image_{req.task_mode}_{timestamp}_seed{current_seed}.png"
                         output_path = os.path.join(DEFAULT_OUTPUT_DIR, filename)
                         w, h = int(req.width), int(req.height)
-                        gen_w, gen_h = _h3_image_effective_size(w, h)
-                        # 官方蒸馏 checkpoint 固定 6 NFE、无 CFG；CPU generator 保证 CPU offload 下种子可复现
+                        # 官方 Modular 管线固定 6 步、无 CFG；小于 4MP 的请求由管线内部自动放大画布后缩回
                         gen = torch.Generator(device="cpu").manual_seed(int(current_seed))
                         call_kw = dict(
                             prompt=req.visual_prompt,
-                            width=gen_w,
-                            height=gen_h,
-                            num_inference_steps=6,
-                            guidance_scale=1.0,
+                            width=w,
+                            height=h,
                             generator=gen,
+                            output="images",
                         )
                         edit_imgs = (
                             [im for im in (first_img, last_img) if im is not None]
                             if req.task_mode == "i2i_edit" else None
                         )
                         out_res = _call_minimax_h3_image_pipe(active_pipe, call_kw, edit_images=edit_imgs)
-                        img_out = out_res.images[0] if hasattr(out_res, "images") else out_res
-                        if (gen_w, gen_h) != (w, h):
-                            img_out = img_out.resize(
-                                (w, h), getattr(Image, "Resampling", Image).LANCZOS
-                            )
+                        img_out = _extract_h3_image_result(out_res)
                         if job_cancel_event.is_set() or ABORT_GENERATION_EVENT.is_set():
                             raise GenerationAbortedError("已手动停止当前推理任务")
                         JOBS[job_id]["progress"] = round(base_prog + 0.96 * span_prog, 3)
@@ -9023,22 +9110,19 @@ def attach_macos_api_routes(app: FastAPI):
             for _ in range(n):
                 cur_seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
                 if img_target_id == "minimax_h3_image":
-                    gw, gh = _h3_image_effective_size(w, h)
+                    # Modular 管线固定 6 步、无 CFG；小于 4MP 由管线内部自动放大画布后缩回
                     gen = torch.Generator(device="cpu").manual_seed(cur_seed)
                     out = _call_minimax_h3_image_pipe(
                         img_pipe,
                         dict(
                             prompt=prompt,
-                            width=gw,
-                            height=gh,
-                            num_inference_steps=6,
-                            guidance_scale=1.0,
+                            width=w,
+                            height=h,
                             generator=gen,
+                            output="images",
                         ),
                     )
-                    img = out.images[0] if hasattr(out, "images") else out
-                    if (gw, gh) != (w, h):
-                        img = img.resize((w, h), getattr(Image, "Resampling", Image).LANCZOS)
+                    img = _extract_h3_image_result(out)
                 elif img_target_id == "z_image_turbo":
                     img = img_pipe(prompt=prompt, width=w, height=h, num_inference_steps=steps, seed=cur_seed, rand_device="cuda")
                 else:

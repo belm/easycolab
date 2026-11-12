@@ -865,13 +865,13 @@ OPEN_MODEL_CATALOG: List[OpenModelSpec] = [
             ),
         ],
         default_files=[
-            ModelFileItem(name="transformer/model-%05d-of-00012.safetensors" % i, desc="H3-Image DiT BF16 %d/12" % i, desc_en="H3-Image DiT BF16 %d/12" % i)
+            ModelFileItem(name="transformer_diffusers/diffusion_pytorch_model-%05d-of-00012.safetensors" % i, desc="H3-Image DiT BF16 %d/12" % i, desc_en="H3-Image DiT BF16 %d/12" % i)
             for i in range(1, 13)
         ] + [
             ModelFileItem(name="text_encoder/model-%05d-of-00014.safetensors" % i, desc="Qwen3-VL 编码器 %d/14" % i, desc_en="Qwen3-VL Encoder %d/14" % i)
             for i in range(1, 15)
         ] + [
-            ModelFileItem(name="vae/diffusion_pytorch_model.safetensors", desc="4K 图像 VAE", desc_en="4K Image VAE"),
+            ModelFileItem(name="vae_diffusers/diffusion_pytorch_model.safetensors", desc="4K 图像 VAE", desc_en="4K Image VAE"),
             ModelFileItem(name="pdd_fused_heads.safetensors", desc="6 步 PDD 融合输出头", desc_en="6-Step PDD Fused Heads"),
         ],
     ),

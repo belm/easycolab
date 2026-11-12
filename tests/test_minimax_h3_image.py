@@ -64,6 +64,9 @@ class MiniMaxH3ImageCatalogTest(unittest.TestCase):
         self.assertIn("of-00012.safetensors", src)
         self.assertIn("of-00014.safetensors", src)
         self.assertIn("pdd_fused_heads.safetensors", src)
+        # 官方 Modular Diffusers 集成使用 transformer_diffusers/ 与 vae_diffusers/
+        self.assertIn("transformer_diffusers/", src)
+        self.assertIn("vae_diffusers/", src)
 
     def test_all_client_catalogs_register_the_model(self):
         for rel in CLIENT_CATALOGS:
@@ -77,11 +80,11 @@ class MiniMaxH3ImageCatalogTest(unittest.TestCase):
             nb = json.load(f)
         cell5 = "".join(nb["cells"][5]["source"])
         self.assertEqual(cell5, _read("app.py"))
-        self.assertIn("diffusers>=0.37.0", "".join(nb["cells"][3]["source"]))
+        self.assertIn("git+https://github.com/huggingface/diffusers.git", "".join(nb["cells"][3]["source"]))
         self.assertIn(MODEL_ID, cell5)
 
     def test_bridge_installs_diffusers(self):
-        self.assertIn("diffusers>=0.37.0", _read("colab_bridge.py"))
+        self.assertIn("git+https://github.com/huggingface/diffusers.git", _read("colab_bridge.py"))
 
     def test_pipeline_branches_exist(self):
         src = _read("app.py")
@@ -90,6 +93,9 @@ class MiniMaxH3ImageCatalogTest(unittest.TestCase):
         self.assertIn("_call_minimax_h3_image_pipe", src)
         self.assertIn("_localize_minimax_h3_image_index", src)
         self.assertIn("_reuse_minimax_h3_text_encoder", src)
+        self.assertIn("ModularPipeline", src)
+        self.assertIn("ComponentsManager", src)
+        self.assertIn("modular_model_index.json", src)
 
 
 class MiniMaxH3ImageHelpersTest(unittest.TestCase):

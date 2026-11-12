@@ -235,7 +235,7 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
         ],
         defaultFiles: (1...12).map { i in
             ModelFileItem(
-                name: String(format: "transformer/model-%05d-of-00012.safetensors", i),
+                name: String(format: "transformer_diffusers/diffusion_pytorch_model-%05d-of-00012.safetensors", i),
                 desc: "H3-Image DiT BF16 \(i)/12",
                 exists: false,
                 size_gb: 0
@@ -248,7 +248,7 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
                 size_gb: 0
             )
         } + [
-            ModelFileItem(name: "vae/diffusion_pytorch_model.safetensors", desc: "4K 图像 VAE", exists: false, size_gb: 0),
+            ModelFileItem(name: "vae_diffusers/diffusion_pytorch_model.safetensors", desc: "4K 图像 VAE", exists: false, size_gb: 0),
             ModelFileItem(name: "pdd_fused_heads.safetensors", desc: "6 步 PDD 融合输出头", exists: false, size_gb: 0)
         ]
     ),
