@@ -1255,7 +1255,29 @@ def setup_colab_ramdisk() -> Optional[str]:
 RAM_ROOT_DIR = setup_colab_ramdisk()
 
 # 如果挂载了 Google Drive，优先将模型持久化保存在云盘 EasyColab_Models（并自动兼容读取历史 Aevix_Models / MiniMax_H3_Models 目录）
-DRIVE_MOUNTED = os.path.exists("/content/drive/MyDrive")
+# 注意：rclone mount 可能晚于服务启动完成，或在内核重启后重新挂载，
+# 因此这里不缓存结果，每次读取都实时判断，避免误报「Drive 不可用」。
+_GDRIVE_PATH = "/content/drive/MyDrive"
+
+
+def _drive_mounted() -> bool:
+    try:
+        return os.path.ismount(_GDRIVE_PATH) or os.path.exists(_GDRIVE_PATH)
+    except Exception:
+        return False
+
+
+class _DriveFlag:
+    """兼容旧的 `DRIVE_MOUNTED` 布尔用法，但每次取值都实时探测。"""
+
+    def __bool__(self) -> bool:
+        return _drive_mounted()
+
+    def __repr__(self) -> str:
+        return str(_drive_mounted())
+
+
+DRIVE_MOUNTED = _DriveFlag()
 
 
 def _has_rclone_drive_remote() -> bool:
@@ -1267,6 +1289,53 @@ def _has_rclone_drive_remote() -> bool:
             return "[easycolab_gdrive]" in f.read()
     except Exception:
         return False
+
+
+_RCLONE_ABOUT_CACHE: Dict[str, Any] = {"ts": 0.0, "total_gb": 0.0, "free_gb": 0.0, "used_gb": 0.0}
+_RCLONE_ABOUT_LOCK = __import__("threading").Lock()
+
+
+def _rclone_drive_quota(force: bool = False) -> Dict[str, float]:
+    """用 rclone about 查询 Google Drive 真实配额（FUSE 挂载点用 shutil.disk_usage 通常返回 0）。
+
+    返回 {total_gb, free_gb, used_gb}；查询失败时全为 0，调用方需自行兜底。
+    """
+    with _RCLONE_ABOUT_LOCK:
+        now = time.time()
+        if not force and (now - _RCLONE_ABOUT_CACHE["ts"]) < 120 and _RCLONE_ABOUT_CACHE["total_gb"] > 0:
+            return dict(_RCLONE_ABOUT_CACHE)
+        if not _has_rclone_drive_remote():
+            return {"total_gb": 0.0, "free_gb": 0.0, "used_gb": 0.0}
+        try:
+            out = subprocess.run(
+                ["rclone", "about", "easycolab_gdrive:", "--json"],
+                capture_output=True, text=True, timeout=25, check=False,
+            ).stdout
+            data = json.loads(out) if out.strip() else {}
+            total_gb = round(float(data.get("total", 0)) / (1024 ** 3), 1)
+            free_gb = round(float(data.get("free", 0)) / (1024 ** 3), 1)
+            used_gb = round(float(data.get("used", 0)) / (1024 ** 3), 1)
+            _RCLONE_ABOUT_CACHE.update(ts=now, total_gb=total_gb, free_gb=free_gb, used_gb=used_gb)
+            print(f"[Drive 配额] rclone about: 总 {total_gb:.1f} GB / 已用 {used_gb:.1f} GB / 剩余 {free_gb:.1f} GB")
+            return {"total_gb": total_gb, "free_gb": free_gb, "used_gb": used_gb}
+        except Exception as e:
+            print(f"[Drive 配额] rclone about 失败: {e}")
+            return {"total_gb": 0.0, "free_gb": 0.0, "used_gb": 0.0}
+
+
+def _drive_free_gb_effective() -> float:
+    """Drive 可用空间：优先 rclone about；回退 statvfs；再回退「不确定则视为充足」。"""
+    q = _rclone_drive_quota()
+    if q["total_gb"] > 0:
+        return q["free_gb"]
+    try:
+        du = shutil.disk_usage("/content/drive/MyDrive")
+        if du.total > 0 and du.free > 0:
+            return round(du.free / (1024 ** 3), 1)
+    except Exception:
+        pass
+    # 挂载存在但读不到配额：认为空间充足（Ultra 会员常见情况），避免误判为本地存储
+    return 1024.0 if _drive_mounted() else 0.0
 
 
 COMFYUI_LOCK = threading.Lock()
@@ -1320,6 +1389,20 @@ MINIMAX_H3_BF16_FILES = (
     ]
 )
 
+# MiniMax-H3 Ref2VA（全参考生视频）差分权重：
+#   Ref2VA 与 FL2VA 共用 text_encoder / video_vae / audio_vae（经核对 SHA 大小完全一致），
+#   仅 DiT 主干为独立 checkpoint（13 分片，约 66GB）。
+# 记录当前显存里 MiniMax-H3 实际加载的变体（fl2va / ref2va）
+_H3_LOADED_VARIANT: Optional[str] = None
+
+MINIMAX_H3_REF2VA_FILES = [
+    (f"Ref2VA/transformer/model-{i:05d}-of-00013.safetensors", f"Ref2VA DiT 全参考主干 BF16 {i}/13")
+    for i in range(1, 14)
+]
+
+# 完整权重 = FL2VA 基础 + Ref2VA 主干（全参考模式所需）
+MINIMAX_H3_ALL_FILES = MINIMAX_H3_BF16_FILES + MINIMAX_H3_REF2VA_FILES
+
 # MiniMax-H3-Image: 基于 H3 的 4K / 1600 万像素图像生成与多参考图编辑模型
 #   - 33.1B DiT (12 分片 BF16) + 图像 VAE (FP32) + 6 步 PDD 蒸馏融合输出头
 #   - 文本编码器与 MiniMax-H3 的 Qwen3-VL 完全一致（14 分片，blob 校验相同），可跨模型直接复用
@@ -1362,9 +1445,13 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
         "name": "MiniMax-H3 (33B)",
         "repo_id": "MiniMaxAI/MiniMax-H3",
         "modality": "video_audio",
-        "category": "全模态音视频生成 · BF16 原生满血 · 32kHz 立体声",
-        "approx_size_gb": 134.1,
-        "files": MINIMAX_H3_BF16_FILES,
+        "category": "全模态音视频生成 · 文生/首尾帧/全参考 · BF16 原生满血 · 32kHz 立体声",
+        # 200.5GB = FL2VA 基础 134.1GB + Ref2VA 全参考主干约 66.4GB
+        "approx_size_gb": 200.5,
+        # 分项大小：Drive 容量判断用「按需最小集」，避免被总和吓退
+        "variant_size_gb": {"fl2va": 134.1, "ref2va": 66.4},
+        "min_required_gb": 134.1,
+        "files": MINIMAX_H3_ALL_FILES,
     },
     "minimax_h3_image": {
         "id": "minimax_h3_image",
@@ -1440,6 +1527,140 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
 
 BUILTIN_MODEL_IDS = set(MODEL_CATALOG.keys())
 CUSTOM_MODELS_LOCK = threading.Lock()
+
+
+# ==============================================================================
+# Cloudflare R2 临时中转（配置持久化 + 自动上传）
+# ==============================================================================
+try:
+    import r2_upload as _r2
+except Exception:  # 允许 app.py 在缺失 r2_upload.py 时仍能启动
+    _r2 = None
+
+R2_CONFIG: Dict[str, Any] = {
+    "enabled": False,
+    "account_id": "",
+    "access_key_id": "",
+    "secret_access_key": "",
+    "bucket": "",
+    "public_base_url": "",
+    "prefix": "easycolab",
+    "auto_upload": True,
+}
+
+
+def _get_r2_config_paths() -> List[str]:
+    paths = [os.path.join(MODEL_BASE_ROOT, "r2_config.json")]
+    local_p = os.path.join(os.getcwd(), "models", "r2_config.json")
+    if os.path.abspath(local_p) != os.path.abspath(paths[0]):
+        paths.append(local_p)
+    return paths
+
+
+def _load_r2_config():
+    global R2_CONFIG
+    for p in _get_r2_config_paths():
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                R2_CONFIG.update({k: v for k, v in data.items() if k in R2_CONFIG})
+            return
+        except Exception as e:
+            print(f"[R2] 读取 {p} 跳过: {e}")
+
+
+def _save_r2_config():
+    data = dict(R2_CONFIG)
+    for p in _get_r2_config_paths():
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[R2] 写入 {p} 失败: {e}")
+
+
+def _boto3_available() -> bool:
+    try:
+        import boto3  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+# 后台自动补齐 boto3（R2 上传依赖），避免用户每次手动 pip install
+_BOTO3_INSTALL_STATE = {"attempted": False, "installing": False, "error": None, "ok": None}
+
+
+def _ensure_boto3_async(force: bool = False) -> None:
+    """首次需要 R2 时在后台线程 pip install boto3；成功后无需重启进程。"""
+    if _boto3_available():
+        _BOTO3_INSTALL_STATE.update(attempted=True, installing=False, error=None, ok=True)
+        return
+    if _BOTO3_INSTALL_STATE["installing"]:
+        return
+    if _BOTO3_INSTALL_STATE["attempted"] and not force:
+        return
+
+    import threading as _th
+    import subprocess as _sp
+    import sys as _sys
+
+    _BOTO3_INSTALL_STATE.update(attempted=True, installing=True, error=None, ok=None)
+
+    def _worker():
+        try:
+            _sp.run(
+                [_sys.executable, "-m", "pip", "install", "-q", "boto3"],
+                check=True,
+                timeout=300,
+                stdout=_sp.DEVNULL,
+                stderr=_sp.PIPE,
+            )
+            _BOTO3_INSTALL_STATE.update(installing=False, ok=_boto3_available())
+            print("[R2] boto3 自动安装完成")
+        except Exception as e:
+            detail = ""
+            try:
+                detail = (e.stderr or b"").decode("utf-8", "replace")[:300]
+            except Exception:
+                pass
+            _BOTO3_INSTALL_STATE.update(installing=False, ok=False, error=f"{type(e).__name__}: {e} {detail}".strip())
+            print(f"[R2] boto3 自动安装失败: {_BOTO3_INSTALL_STATE['error']}")
+
+    _th.Thread(target=_worker, daemon=True).start()
+
+
+def _boto3_state() -> Dict[str, Any]:
+    return {
+        "available": _boto3_available(),
+        "auto_install_attempted": _BOTO3_INSTALL_STATE["attempted"],
+        "installing": _BOTO3_INSTALL_STATE["installing"],
+        "error": _BOTO3_INSTALL_STATE["error"],
+    }
+
+
+def _r2_public_view(trigger_install: bool = False) -> Dict[str, Any]:
+    """返回给前端的配置视图：密钥打码，只回是否已设置。"""
+    if trigger_install:
+        _ensure_boto3_async()
+    return {
+        "enabled": bool(R2_CONFIG.get("enabled")),
+        "account_id": R2_CONFIG.get("account_id") or "",
+        "bucket": R2_CONFIG.get("bucket") or "",
+        "public_base_url": R2_CONFIG.get("public_base_url") or "",
+        "prefix": R2_CONFIG.get("prefix") or "",
+        "auto_upload": bool(R2_CONFIG.get("auto_upload", True)),
+        "has_access_key": bool(R2_CONFIG.get("access_key_id")),
+        "has_secret": bool(R2_CONFIG.get("secret_access_key")),
+        "configured": bool(_r2 and _r2.is_configured(R2_CONFIG)),
+        "state": dict(_r2.R2_STATE) if _r2 else {},
+        "boto3_available": _boto3_available(),
+        "boto3": _boto3_state(),
+    }
 
 
 def _get_custom_models_json_paths() -> List[str]:
@@ -2439,6 +2660,7 @@ def remove_custom_hf_model_core(model_id: str, delete_files: bool = False) -> Tu
 
 
 _load_persisted_custom_models()
+_load_r2_config()
 
 DEFAULT_OUTPUT_DIR = (
     "/content/drive/MyDrive/EasyColab_Outputs"
@@ -2691,8 +2913,49 @@ def _get_model_dirs(model_id: str) -> Tuple[Optional[str], str, str]:
     return ram_dir, nvme_dir, drive_dir
 
 
+# 已扫描过的 Drive 权重索引：{fname: abs_path}
+_DRIVE_FILE_INDEX: Dict[str, str] = {}
+_DRIVE_INDEX_TS: float = 0.0
+_DRIVE_INDEX_LOCK = __import__("threading").Lock()
+
+
+def _build_drive_file_index(force: bool = False) -> Dict[str, str]:
+    """一次性递归扫描 Google Drive 下的权重文件，建立 {文件名: 绝对路径} 索引。
+
+    Drive 上的模型可能被放在任意子目录（EasyColab_Models / Aevix_Models / 用户自建目录），
+    这里不再依赖固定子路径，避免因目录名变化而重复下载。
+    """
+    global _DRIVE_FILE_INDEX, _DRIVE_INDEX_TS
+    with _DRIVE_INDEX_LOCK:
+        now = time.time()
+        if not force and _DRIVE_FILE_INDEX and (now - _DRIVE_INDEX_TS) < 60:
+            return dict(_DRIVE_FILE_INDEX)
+        index: Dict[str, str] = {}
+        root = "/content/drive/MyDrive"
+        try:
+            if os.path.isdir(root):
+                for dirpath, _dirnames, filenames in os.walk(root):
+                    for fn in filenames:
+                        if not fn.endswith(".safetensors"):
+                            continue
+                        full = os.path.join(dirpath, fn)
+                        try:
+                            if os.path.getsize(full) > 64 * 1024:
+                                # 同名文件保留先命中的（更靠近根的一层优先）
+                                index.setdefault(fn, full)
+                        except Exception:
+                            continue
+        except Exception as e:
+            print(f"[Drive 索引] 扫描失败: {e}")
+        _DRIVE_FILE_INDEX = index
+        _DRIVE_INDEX_TS = now
+        if index:
+            print(f"[Drive 索引] 在 Google Drive 中发现 {len(index)} 个权重文件")
+        return dict(index)
+
+
 def _find_existing_model_file(model_id: str, fname: str) -> Optional[str]:
-    """按速度优先级查找已存在的模型权重文件：1. /dev/shm 内存盘 -> 2. 本地 NVMe -> 3. Google Drive (含历史目录与 HuggingFace 缓存兼容)"""
+    """按速度优先级查找已存在的模型权重文件：1. /dev/shm 内存盘 -> 2. 本地 NVMe -> 3. Google Drive（递归索引）"""
     ram_dir, nvme_dir, drive_dir = _get_model_dirs(model_id)
     spec = MODEL_CATALOG.get(model_id, MODEL_CATALOG["minimax_h3"])
     repo_sub = spec["repo_id"]
@@ -2704,13 +2967,16 @@ def _find_existing_model_file(model_id: str, fname: str) -> Optional[str]:
     candidates.append(os.path.join(f"/dev/shm/OpenModels/{model_id}", fname))
     candidates.append(os.path.join(nvme_dir, fname))
     candidates.append(os.path.join(drive_dir, fname))
-    if DRIVE_MOUNTED:
-        for leg_root in LEGACY_DRIVE_MODEL_ROOTS:
-            if os.path.isdir(leg_root):
-                candidates.append(os.path.join(leg_root, repo_sub, fname))
+    for leg_root in LEGACY_DRIVE_MODEL_ROOTS:
+        if os.path.isdir(leg_root):
+            candidates.append(os.path.join(leg_root, repo_sub, fname))
     for p in candidates:
         if os.path.exists(p) and os.path.getsize(p) > 64 * 1024:
             return p
+    # 兜底：递归扫描 Drive，容忍任意子目录结构
+    hit = _build_drive_file_index().get(os.path.basename(fname))
+    if hit and os.path.exists(hit) and os.path.getsize(hit) > 64 * 1024:
+        return hit
     return None
 
 
@@ -2889,10 +3155,16 @@ def _get_storage_metrics_dict(refresh_drive: bool = False) -> Dict[str, Any]:
     if DRIVE_MOUNTED and (refresh_drive or (now - _CACHED_DRIVE_METRICS["ts"]) >= 15.0):
         if os.path.exists("/content/drive/MyDrive"):
             try:
-                gu = shutil.disk_usage("/content/drive/MyDrive")
-                _CACHED_DRIVE_METRICS["drive_total_gb"] = round(gu.total / (1024 ** 3), 1)
-                _CACHED_DRIVE_METRICS["drive_free_gb"] = round(gu.free / (1024 ** 3), 1)
-                _CACHED_DRIVE_METRICS["drive_used_gb"] = round(max(0.0, (gu.total - gu.free) / (1024 ** 3)), 1)
+                _q = _rclone_drive_quota()
+                if _q["total_gb"] > 0:
+                    _CACHED_DRIVE_METRICS["drive_total_gb"] = _q["total_gb"]
+                    _CACHED_DRIVE_METRICS["drive_free_gb"] = _q["free_gb"]
+                    _CACHED_DRIVE_METRICS["drive_used_gb"] = _q["used_gb"]
+                else:
+                    gu = shutil.disk_usage("/content/drive/MyDrive")
+                    _CACHED_DRIVE_METRICS["drive_total_gb"] = round(gu.total / (1024 ** 3), 1)
+                    _CACHED_DRIVE_METRICS["drive_free_gb"] = round(gu.free / (1024 ** 3), 1)
+                    _CACHED_DRIVE_METRICS["drive_used_gb"] = round(max(0.0, (gu.total - gu.free) / (1024 ** 3)), 1)
                 _CACHED_DRIVE_METRICS["ts"] = now
             except Exception:
                 pass
@@ -3033,6 +3305,7 @@ def get_gpu_status_dict(model_id: Optional[str] = None) -> Dict[str, Any]:
         "loaded_context_length": loaded_ctx,
         "is_downloading": MODEL_DOWNLOAD_STATE["is_downloading"],
         "is_loading_vram": MODEL_DOWNLOAD_STATE["is_loading_vram"],
+        "h3_variant": MODEL_DOWNLOAD_STATE.get("h3_variant") or "fl2va",
         "task_progress": MODEL_DOWNLOAD_STATE["progress"],
         "task_message": MODEL_DOWNLOAD_STATE["message"],
         "uptime_seconds": uptime_seconds,
@@ -3433,16 +3706,29 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
 
         ram_dir, nvme_dir, drive_dir = _get_model_dirs(target_id)
         drive_has_space = False
-        if DRIVE_MOUNTED and os.path.exists("/content/drive/MyDrive"):
+        if _drive_mounted() and os.path.exists("/content/drive/MyDrive"):
             try:
-                drive_free_gb = shutil.disk_usage("/content/drive/MyDrive").free / (1024 ** 3)
-                drive_has_space = drive_free_gb >= spec["approx_size_gb"] + 2.0
+                # FUSE 挂载点用 statvfs 往往返回 0，必须走 rclone about 拿真实配额
+                drive_free_gb = _drive_free_gb_effective()
+
+                # 计算「真实还需下载」的量：已存在于 Drive/本地的文件不计入需求
+                need_gb = 0.0
+                for _fn, _desc in spec["files"]:
+                    if _find_existing_model_file(target_id, _fn) is None:
+                        need_gb += spec.get("approx_size_gb", 0.0) / max(1, len(spec["files"]))
+                if need_gb <= 0:
+                    need_gb = spec.get("min_required_gb", spec["approx_size_gb"])
+
+                drive_has_space = drive_free_gb >= need_gb + 2.0
                 if not drive_has_space:
                     print(
-                        f"ℹ️ Google Drive 剩余空间 ({drive_free_gb:.1f} GB) 小于 {spec['name']} 所需容量 "
-                        f"({spec['approx_size_gb']:.1f} GB)，自动改用实例本地高速 NVMe 磁盘 ({nvme_dir}) 存储！"
+                        f"ℹ️ Google Drive 剩余空间 ({drive_free_gb:.1f} GB) 小于本次还需下载的 "
+                        f"{need_gb:.1f} GB，自动改用实例本地高速 NVMe 磁盘 ({nvme_dir}) 存储！"
                     )
-            except Exception:
+                else:
+                    print(f"✅ Google Drive 可用（剩余 {drive_free_gb:.1f} GB，本次还需约 {need_gb:.1f} GB），将持久化保存到云盘")
+            except Exception as _e:
+                print(f"ℹ️ Drive 容量检测失败（{_e}），按本地存储处理")
                 drive_has_space = False
 
         # 存储位置：用户可在客户端选择 auto / drive / local
@@ -3451,10 +3737,13 @@ def download_model_weights_core(model_id: Optional[str] = None, hf_token: str = 
             storage_target = "auto"
 
         if storage_target == "drive":
-            if not DRIVE_MOUNTED:
+            if not _drive_mounted():
                 return False, "已选择「存储到 Google Drive」，但当前 Colab 未挂载 Drive。请先在 notebook 挂载 Google Drive，或改选「实例本地磁盘」。"
             if not drive_has_space:
-                return False, f"已选择「存储到 Google Drive」，但 Drive 剩余空间不足（需 {spec['approx_size_gb']:.1f} GB）。请清理云盘空间或改选「实例本地磁盘」。"
+                return False, (
+                    "已选择「存储到 Google Drive」，但 Drive 剩余空间不足。"
+                    "请清理云盘空间、改选「实例本地磁盘」，或在 R2/本地先清掉多余权重。"
+                )
             primary_dl_dir = drive_dir
         elif storage_target == "local":
             primary_dl_dir = nvme_dir
@@ -4271,15 +4560,38 @@ class _CausalLMProcessorAdapter:
         return self.tokenizer(text, padding=padding, return_tensors=return_tensors)
 
 
+def set_h3_variant_core(variant: str = "fl2va") -> Tuple[bool, str]:
+    """切换 MiniMax-H3 加载变体（fl2va / ref2va），切换后需重新加载到显存生效。"""
+    v = str(variant or "fl2va").strip().lower()
+    if v not in ("fl2va", "ref2va"):
+        return False, "❌ 变体必须是 fl2va 或 ref2va"
+    MODEL_DOWNLOAD_STATE["h3_variant"] = v
+    loaded = str(_H3_LOADED_VARIANT or "fl2va")
+    if loaded == v:
+        return True, f"✅ MiniMax-H3 变体：{v.upper()}（当前已加载，无需重载）"
+    return (
+        True,
+        f"✅ MiniMax-H3 变体已切换为 {v.upper()}（当前显存里是 {loaded.upper()}，"
+        f"请点「2. 加载模型至显存」使其生效）",
+    )
+
+
 def load_model_to_vram_core(
     model_id: Optional[str] = None,
     precision_mode: str = "bf16",
     offload_mode: str = "disk",
     hf_token: str = "",
     context_length: Optional[int] = None,
+    variant: Optional[str] = None,
 ) -> Tuple[bool, str]:
     global SELECTED_MODEL_ID, QWEN_CONTEXT_LENGTH
     touch_activity()
+
+    # 变体：本次加载若显式指定，则覆盖并记住
+    if variant:
+        v = str(variant).strip().lower()
+        if v in ("fl2va", "ref2va"):
+            MODEL_DOWNLOAD_STATE["h3_variant"] = v
 
     if context_length is not None:
         QWEN_CONTEXT_LENGTH = _clamp_context_length(context_length)
@@ -4382,8 +4694,18 @@ def load_model_to_vram_core(
                     "computation_device": "cuda",
                 }
 
+                # 变体选择：fl2va = 首尾帧/文生（默认）；ref2va = 全参考生视频
+                #   Ref2VA 仅 DiT 主干不同，编码器与 VAE 完全共用 FL2VA 那一套
+                h3_variant = str(
+                    (MODEL_DOWNLOAD_STATE.get("h3_variant") if isinstance(MODEL_DOWNLOAD_STATE, dict) else None)
+                    or "fl2va"
+                ).lower()
+                if h3_variant not in ("fl2va", "ref2va"):
+                    h3_variant = "fl2va"
                 te_rel_names = [f"FL2VA/text_encoder/model-{i:05d}-of-00014.safetensors" for i in range(1, 15)]
-                dit_rel_names = [f"FL2VA/transformer/model-{i:05d}-of-00013.safetensors" for i in range(1, 14)]
+                dit_prefix = "Ref2VA" if h3_variant == "ref2va" else "FL2VA"
+                dit_rel_names = [f"{dit_prefix}/transformer/model-{i:05d}-of-00013.safetensors" for i in range(1, 14)]
+                print(f"[MiniMax-H3] 加载变体: {h3_variant.upper()}（DiT 主干来自 {dit_prefix}/transformer）")
 
                 MODEL_DOWNLOAD_STATE["progress"] = 0.22
                 MODEL_DOWNLOAD_STATE["message"] = "正在映射 MiniMax-H3 BF16 多模态编码器权重 (14 分片)..."
@@ -4465,7 +4787,11 @@ def load_model_to_vram_core(
                     ),
                     vram_limit=vram_limit,
                 )
-                mode_label = f"{spec['name']} · BF16 原生"
+                global _H3_LOADED_VARIANT
+                _H3_LOADED_VARIANT = h3_variant
+                mode_label = (
+                    f"{spec['name']} · {h3_variant.upper()} · BF16 原生"
+                )
                 residency_tag = _enable_high_vram_optimizations(
                     new_pipe,
                     total_vram_gb=total_vram_gb,
@@ -5203,6 +5529,7 @@ def generate_video(
     music_prompt: str,
     first_frame_img: Optional[Image.Image],
     last_frame_img: Optional[Image.Image],
+    reference_images: Optional[list],
     resolution_label: str,
     num_frames: int,
     num_inference_steps: int,
@@ -5234,6 +5561,37 @@ def generate_video(
 
     keyframes = []
     keyframe_indices = []
+    references = None
+    if task_mode == "ref2va":
+        # gr.Gallery 传入的是 [(文件路径, 说明), ...] 或 PIL.Image 列表，这里统一成 PIL.Image
+        refs = []
+        for item in (reference_images or []):
+            if item is None:
+                continue
+            if isinstance(item, (tuple, list)) and item:
+                item = item[0]
+            if isinstance(item, str):
+                try:
+                    item = Image.open(item).convert("RGB")
+                except Exception:
+                    continue
+            if isinstance(item, Image.Image):
+                refs.append(item)
+        if not refs:
+            return (
+                None,
+                "⚠️ 在「全参考生视频」模式下，请至少上传 1 张参考图（最多 9 张）！",
+                seed,
+                get_history_videos(save_dir),
+            )
+        if len(refs) > 9:
+            return (
+                None,
+                f"⚠️ 全参考模式最多支持 9 张参考图，当前上传了 {len(refs)} 张。",
+                seed,
+                get_history_videos(save_dir),
+            )
+        references = [{"type": "image", "image": im.convert("RGB")} for im in refs]
     if task_mode == "fl2va":
         if first_frame_img is not None:
             keyframes.append(first_frame_img.convert("RGB"))
@@ -5273,6 +5631,8 @@ def generate_video(
             if keyframes:
                 call_kwargs["keyframes"] = keyframes
                 call_kwargs["keyframe_indices"] = keyframe_indices
+            if references:
+                call_kwargs["references"] = references
 
             _reclaim_transient_gpu_memory()
             video, audio = _run_pipeline_with_smart_tiling(PIPELINE, call_kwargs)
@@ -7162,6 +7522,27 @@ class LoadModelRequest(BaseModel):
     include_pattern: str = ""
     custom_name: str = ""
     modality: str = "auto"
+    # MiniMax-H3 专用：fl2va（首尾帧/文生，默认）或 ref2va（全参考）
+    variant: str = "fl2va"
+
+
+class H3VariantRequest(BaseModel):
+    variant: str = "fl2va"
+
+
+class R2UploadRequest(BaseModel):
+    filename: str = ""
+
+
+class R2ConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    account_id: Optional[str] = None
+    access_key_id: Optional[str] = None
+    secret_access_key: Optional[str] = None
+    bucket: Optional[str] = None
+    public_base_url: Optional[str] = None
+    prefix: Optional[str] = None
+    auto_upload: Optional[bool] = None
 
 
 class ContextConfigRequest(BaseModel):
@@ -7199,6 +7580,9 @@ class GenerateVideoRequest(BaseModel):
     music_prompt: str = ""
     first_frame_base64: Optional[str] = None
     last_frame_base64: Optional[str] = None
+    # Ref2VA 全参考模式：多张参考图（每项为 base64 data URL 或纯 base64）
+    #   最多 9 张，按数组顺序对应提示词里的 <Picture 1>..<Picture N>
+    reference_images: Optional[List[str]] = None
     width: int = 832
     height: int = 480
     num_frames: int = 124
@@ -7704,6 +8088,17 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
 
         keyframes = []
         keyframe_indices = []
+        references = None
+        if pipeline_arch == "minimax_h3" and req.task_mode in ("fl2va", "ref2va"):
+            _loaded_variant = str(MODEL_DOWNLOAD_STATE.get("h3_variant") or "fl2va").lower()
+            _need_variant = "ref2va" if req.task_mode == "ref2va" else "fl2va"
+            if _loaded_variant != _need_variant:
+                JOBS[job_id]["status"] = "failed"
+                JOBS[job_id]["message"] = (
+                    f"当前显存里加载的是 {_loaded_variant.upper()} 主干，但请求的是 {_need_variant.upper()}。"
+                    f"请在客户端把 MiniMax-H3 变体切换为 {_need_variant.upper()} 后重新「加载到显存」。"
+                )
+                return
         if pipeline_arch == "minimax_h3" and req.task_mode == "fl2va":
             if first_img is not None:
                 keyframes.append(first_img)
@@ -7715,6 +8110,26 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
                 JOBS[job_id]["status"] = "failed"
                 JOBS[job_id]["message"] = "首尾帧模式下请至少提供首帧或尾帧图片"
                 return
+        elif pipeline_arch == "minimax_h3" and req.task_mode == "ref2va":
+            # 全参考模式：把所有参考图按顺序打包成 references（上限 9 张，与官方规格一致）
+            raw_refs = [b for b in (req.reference_images or []) if b]
+            if not raw_refs:
+                JOBS[job_id]["status"] = "failed"
+                JOBS[job_id]["message"] = "全参考模式下请至少提供 1 张参考图（最多 9 张）"
+                return
+            if len(raw_refs) > 9:
+                JOBS[job_id]["status"] = "failed"
+                JOBS[job_id]["message"] = f"全参考模式最多支持 9 张参考图，当前传入 {len(raw_refs)} 张"
+                return
+            references = []
+            for idx, b64 in enumerate(raw_refs, start=1):
+                im = decode_base64_image(b64)
+                if im is None:
+                    JOBS[job_id]["status"] = "failed"
+                    JOBS[job_id]["message"] = f"第 {idx} 张参考图解码失败，请检查图片格式"
+                    return
+                references.append({"type": "image", "image": im.convert("RGB")})
+            JOBS[job_id]["message"] = f"已载入 {len(references)} 张参考图（全参考模式）"
         elif modality == "image" and req.task_mode == "i2i_edit" and first_img is None and last_img is None:
             JOBS[job_id]["status"] = "failed"
             JOBS[job_id]["message"] = "图像编辑/重绘模式下请至少拖入一张输入图片"
@@ -7797,6 +8212,8 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
                         if keyframes:
                             call_kwargs["keyframes"] = keyframes
                             call_kwargs["keyframe_indices"] = keyframe_indices
+                        if references:
+                            call_kwargs["references"] = references
                         video, audio = _run_pipeline_with_smart_tiling(active_pipe, call_kwargs)
                         if job_cancel_event.is_set() or ABORT_GENERATION_EVENT.is_set():
                             raise GenerationAbortedError("已手动停止当前推理任务")
@@ -7932,6 +8349,31 @@ def _run_async_generation_job(job_id: str, req: GenerateVideoRequest):
                 "media_type": media_type,
                 "elapsed": sub_elapsed,
             }
+            # 自动上传到 Cloudflare R2（临时中转，加速本地下载）
+            if _r2 and R2_CONFIG.get("enabled") and R2_CONFIG.get("auto_upload", True) and _r2.is_configured(R2_CONFIG):
+                # 缺 boto3 时先尝试自动安装（装上后本次即可上传；装不上则不阻塞生成本身）
+                if not _boto3_available():
+                    _ensure_boto3_async()
+                    for _wait in range(30):
+                        if _boto3_available() or not _BOTO3_INSTALL_STATE["installing"]:
+                            break
+                        time.sleep(1)
+                try:
+                    _up = _r2.upload_file(output_path, R2_CONFIG)
+                    if _up.get("ok"):
+                        media_item["r2_url"] = _up["url"]
+                        media_item["r2_key"] = _up["key"]
+                        print(f"[R2] 已上传: {_up['url']} ({_up.get('elapsed')}s)")
+                    else:
+                        media_item["r2_error"] = _up.get("error")
+                        print(f"[R2] 上传失败: {_up.get('error')}")
+                except Exception as _e:
+                    media_item["r2_error"] = f"{type(_e).__name__}: {_e}"
+                    print(f"[R2] 上传异常: {_e}")
+                # 本次任务的 R2 结果也挂到 job 上，方便客户端读取
+                JOBS[job_id]["r2_url"] = media_item.get("r2_url")
+                JOBS[job_id]["r2_error"] = media_item.get("r2_error")
+
             JOBS[job_id]["completed_videos"] = list(JOBS[job_id]["completed_videos"]) + [media_item]
             JOBS[job_id]["completed_count"] = batch_idx + 1
             JOBS[job_id]["filename"] = filename
@@ -9642,6 +10084,11 @@ def attach_macos_api_routes(app: FastAPI):
                 model_id_override=req.model_id,
             )
         target_id = req.model_id if (req.model_id and req.model_id in MODEL_CATALOG) else SELECTED_MODEL_ID
+        # 记录 MiniMax-H3 变体（fl2va / ref2va），由 load_model_to_vram_core 读取
+        _variant = str(getattr(req, "variant", "") or "fl2va").strip().lower()
+        if _variant not in ("fl2va", "ref2va"):
+            _variant = "fl2va"
+        MODEL_DOWNLOAD_STATE["h3_variant"] = _variant
         if not MODEL_DOWNLOAD_STATE["is_loading_vram"]:
             t = threading.Thread(
                 target=load_model_to_vram_core,
@@ -9650,6 +10097,93 @@ def attach_macos_api_routes(app: FastAPI):
             )
             t.start()
         return get_gpu_status_dict(model_id=target_id)
+
+    @app.post("/minimax_api/h3_variant")
+    def api_set_h3_variant(req: H3VariantRequest):
+        """切换 MiniMax-H3 加载变体（fl2va / ref2va）。切换后需重新「加载到显存」生效。"""
+        touch_activity()
+        ok, msg = set_h3_variant_core(req.variant)
+        if not ok:
+            return {"ok": False, "error": msg}
+        v = str(req.variant or "fl2va").strip().lower()
+        loaded = str(_H3_LOADED_VARIANT or "fl2va")
+        return {
+            "ok": True,
+            "variant": v,
+            "loaded_variant": loaded,
+            "needReload": loaded != v,
+            "note": msg,
+        }
+
+    @app.get("/minimax_api/r2/config")
+    def api_r2_get_config():
+        touch_activity()
+        return {"ok": True, "config": _r2_public_view()}
+
+    @app.post("/minimax_api/r2/config")
+    def api_r2_save_config(req: R2ConfigRequest):
+        touch_activity()
+        patch = {k: v for k, v in req.model_dump().items() if v is not None}
+        # 空字符串表示「不修改」密钥类字段（与前端留空=保持一致的约定）
+        for secret_key in ("access_key_id", "secret_access_key"):
+            if secret_key in patch and patch[secret_key] == "":
+                patch.pop(secret_key, None)
+        if "public_base_url" in patch:
+            patch["public_base_url"] = str(patch["public_base_url"]).strip()
+        if "bucket" in patch:
+            patch["bucket"] = str(patch["bucket"]).strip()
+        if "prefix" in patch:
+            patch["prefix"] = str(patch["prefix"]).strip().strip("/")
+        R2_CONFIG.update(patch)
+        _save_r2_config()
+        return {"ok": True, "config": _r2_public_view()}
+
+    @app.post("/minimax_api/r2/test")
+    def api_r2_test(req: R2ConfigRequest):
+        touch_activity()
+        if _r2 is None:
+            return {"ok": False, "error": "服务端缺少 r2_upload.py 模块"}
+        # 支持「用未保存的临时参数测试」
+        cfg = dict(R2_CONFIG)
+        patch = {k: v for k, v in req.model_dump().items() if v is not None}
+        for secret_key in ("access_key_id", "secret_access_key"):
+            if secret_key in patch and patch[secret_key] == "":
+                patch.pop(secret_key, None)
+        cfg.update(patch)
+        # R2 需要 boto3：首次自动安装，装不上再提示
+        if not _boto3_available():
+            _ensure_boto3_async()
+            if _BOTO3_INSTALL_STATE["installing"]:
+                return {
+                    "ok": False,
+                    "error": "正在自动安装 boto3（约 10~30 秒），请稍后重试「测试连接」。",
+                    "installing": True,
+                }
+            if not _boto3_available():
+                return {
+                    "ok": False,
+                    "error": "boto3 自动安装失败：" + str(_BOTO3_INSTALL_STATE.get("error") or "未知原因"),
+                }
+        if not _r2.is_configured({**cfg, "enabled": True}):
+            return {"ok": False, "error": "请先完整填写 Account ID / Access Key ID / Secret / 存储桶名称"}
+        res = _r2.test_connection({**cfg, "enabled": True})
+        return res
+
+    @app.post("/minimax_api/r2/upload")
+    def api_r2_upload(req: R2UploadRequest):
+        """手动把服务器上某个已生成的媒体文件传到 R2（补传用）。"""
+        touch_activity()
+        if _r2 is None:
+            return {"ok": False, "error": "服务端缺少 r2_upload.py 模块"}
+        if not _r2.is_configured(R2_CONFIG):
+            return {"ok": False, "error": "R2 未配置或未启用"}
+        name = os.path.basename(str(req.filename or "").strip())
+        if not name:
+            return {"ok": False, "error": "缺少 filename"}
+        path = os.path.join(DEFAULT_OUTPUT_DIR, name)
+        if not os.path.isfile(path):
+            return {"ok": False, "error": f"找不到文件: {name}"}
+        return _r2.upload_file(path, R2_CONFIG)
 
     @app.post("/minimax_api/unload_model")
     def api_unload_model(req: UnloadModelRequest):
@@ -10047,6 +10581,15 @@ def create_ui() -> gr.Blocks:
                         add_custom_model_btn = gr.Button("➕ 解析并导入自定义 HF 模型", variant="secondary", size="sm")
 
                     with gr.Row():
+                        h3_variant_dropdown = gr.Dropdown(
+                            choices=[
+                                ("FL2VA · 文生 / 首尾帧", "fl2va"),
+                                ("Ref2VA · 全参考（多参考图）", "ref2va"),
+                            ],
+                            value="fl2va",
+                            label="MiniMax-H3 加载变体（切换后需重新加载到显存）",
+                        )
+                    with gr.Row():
                         download_model_btn = gr.Button(
                             "📥 1. 极速下载模型权重",
                             variant="secondary",
@@ -10123,6 +10666,16 @@ def create_ui() -> gr.Blocks:
                                 type="pil",
                                 height=220,
                             )
+                    with gr.TabItem("🎭 全参考生音视频 / Ref2VA", id="ref2va") as tab_ref2va:
+                        ref2va_desc_md = gr.Markdown(
+                            "上传 **最多 9 张参考图**（人物/场景/道具），模型会按提示词里的 "
+                            "`<Subject 1>`、`<Picture 1>`… 标签逐一引用。"
+                            "\n\n⚠️ 使用前请先把 MiniMax-H3 加载变体切到 **Ref2VA**。"
+                        )
+                        reference_gallery = gr.Gallery(
+                            label="🖼️ 参考图（顺序即 <Picture 1>、<Picture 2>…）",
+                            columns=5, height=200, allow_preview=True,
+                        )
 
                 with gr.Group():
                     visual_prompt_input = gr.Textbox(
@@ -10294,6 +10847,7 @@ def create_ui() -> gr.Blocks:
 
         tab_t2va.select(fn=lambda: "t2va", inputs=None, outputs=task_mode_state)
         tab_fl2va.select(fn=lambda: "fl2va", inputs=None, outputs=task_mode_state)
+        tab_ref2va.select(fn=lambda: "ref2va", inputs=None, outputs=task_mode_state)
 
         refresh_gpu_btn.click(fn=get_gpu_and_model_summary_text, inputs=None, outputs=gpu_status_text)
 
@@ -10339,9 +10893,17 @@ def create_ui() -> gr.Blocks:
             outputs=run_status_box,
         ).then(fn=get_gpu_and_model_summary_text, inputs=None, outputs=gpu_status_text)
 
+        h3_variant_dropdown.change(
+            fn=lambda v: set_h3_variant_core(v)[1],
+            inputs=[h3_variant_dropdown],
+            outputs=run_status_box,
+        )
+
         load_model_btn.click(
-            fn=lambda prec, off, tok: load_model_to_vram_core(SELECTED_MODEL_ID, prec, off, tok)[1],
-            inputs=[precision_Choice, offload_choice, hf_token_input],
+            fn=lambda prec, off, tok, var: load_model_to_vram_core(
+                SELECTED_MODEL_ID, prec, off, tok, None, variant=var
+            )[1],
+            inputs=[precision_Choice, offload_choice, hf_token_input, h3_variant_dropdown],
             outputs=run_status_box,
         ).then(fn=get_gpu_and_model_summary_text, inputs=None, outputs=gpu_status_text)
 
@@ -10354,6 +10916,7 @@ def create_ui() -> gr.Blocks:
                 music_prompt_input,
                 first_frame_input,
                 last_frame_input,
+                reference_gallery,
                 resolution_dropdown,
                 num_frames_slider,
                 steps_slider,

@@ -93,6 +93,8 @@ struct MainStudioView: View {
                     vm.openOnboardingGuide(step: 0)
                 }
             }
+            // 启动即恢复上次的 Colab 会话（不重新申请实例、不重复下载/加载模型）
+            Task { await vm.restoreLastSessionIfAvailable() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openEasyColabGuide)) { _ in
             vm.openOnboardingGuide(step: 0)
@@ -366,6 +368,16 @@ struct MainStudioView: View {
                 }
 
                 SidebarCard(
+                    title: L("R2 加速中转（可选）", "R2 Accelerated Relay (Optional)"),
+                    icon: "icloud.and.arrow.up",
+                    badge: vm.r2Configured
+                        ? (vm.r2Enabled ? L("已启用", "On") : L("已配置", "Set"))
+                        : L("未配置", "Off")
+                ) {
+                    r2RelayRows
+                }
+
+                SidebarCard(
                     title: vm.activeModelSpec.modality == .comfyUI
                         ? L("ComfyUI 云盘持久化与控制", "ComfyUI Persistence & Controls")
                         : (vm.activeModelSpec.modality == .llmVLM
@@ -379,6 +391,109 @@ struct MainStudioView: View {
             .padding(14)
         }
         .compatScrollIndicatorMargins(.vertical, 6)
+    }
+
+    @ViewBuilder
+    var r2RelayRows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L(
+                "生成完成后把视频自动传到 Cloudflare R2（公开存储桶，建议 4 小时生命周期），本地走 CDN 加速下载。",
+                "Upload finished videos to Cloudflare R2 (public bucket, 4h lifecycle recommended) for fast local download via CDN."
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if !vm.r2Boto3Available {
+                Text(L("⚠️ 服务端缺少 boto3，请在 Colab 执行：!pip install -q boto3",
+                       "⚠️ boto3 missing on server. Run: !pip install -q boto3"))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            Toggle(L("启用 R2 自动上传", "Enable R2 auto-upload"), isOn: $vm.r2Enabled)
+                .controlSize(.small)
+            Toggle(L("生成完成后自动上传", "Upload automatically after generation"), isOn: $vm.r2AutoUpload)
+                .controlSize(.small)
+                .disabled(!vm.r2Enabled)
+
+            DisclosureGroup(isExpanded: $vm.r2ShowConfig) {
+                VStack(alignment: .leading, spacing: 6) {
+                    r2Field(L("Account ID", "Account ID"), text: $vm.r2AccountId, placeholder: "a1b2c3d4e5f6...")
+                    r2Field(L("Access Key ID", "Access Key ID"), text: $vm.r2AccessKeyId,
+                            placeholder: vm.r2HasAccessKey ? L("已保存（留空不修改）", "Saved (leave empty)") : "")
+                    r2SecureField(L("Secret Access Key", "Secret Access Key"), text: $vm.r2SecretKey,
+                                  placeholder: vm.r2HasSecret ? L("已保存（留空不修改）", "Saved (leave empty)") : "")
+                    r2Field(L("存储桶名称", "Bucket name"), text: $vm.r2Bucket, placeholder: "easycolab-temp")
+                    r2Field(L("公开访问地址", "Public base URL"), text: $vm.r2PublicBase,
+                            placeholder: "https://pub-xxxx.r2.dev 或自定义域名")
+                    r2Field(L("目录前缀（可选）", "Object prefix (optional)"), text: $vm.r2Prefix, placeholder: "easycolab")
+
+                    Text(L("提示：存储桶需开启公开访问；建议在 R2 控制台给该桶配置 4 小时对象生命周期规则。",
+                           "Tip: enable public access on the bucket; add a 4-hour object lifecycle rule in the R2 dashboard."))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            } label: {
+                Text(L("详细配置", "Configuration"))
+                    .font(.callout)
+            }
+
+            if let err = vm.r2LastError {
+                Text(err)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            }
+
+            HStack(spacing: 6) {
+                Button {
+                    Task { await vm.testR2Connection() }
+                } label: {
+                    HStack(spacing: 4) {
+                        if vm.r2IsTesting { ProgressView().controlSize(.small) }
+                        Text(vm.r2IsTesting ? L("测试中…", "Testing…") : L("测试连接", "Test"))
+                    }
+                }
+                .controlSize(.small)
+                .disabled(vm.r2IsTesting || !vm.isConnected)
+
+                Button(L("保存", "Save")) {
+                    Task { await vm.saveR2Config() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .disabled(!vm.isConnected)
+
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    func r2Field(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .leading)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11, design: .monospaced))
+        }
+    }
+
+    @ViewBuilder
+    func r2SecureField(_ label: String, text: Binding<String>, placeholder: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .leading)
+            SecureField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11, design: .monospaced))
+        }
     }
 
     @ViewBuilder
@@ -1204,6 +1319,23 @@ struct MainStudioView: View {
                     ProgressView(value: vm.modelTaskProgress, total: 1.0)
                 }
 
+                if vm.selectedModelId == "minimax_h3" {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Picker(L("H3 加载变体", "H3 Loading Variant"), selection: $vm.h3Variant) {
+                            Text(L("FL2VA · 文生 / 首尾帧", "FL2VA · Text / Keyframes")).tag("fl2va")
+                            Text(L("Ref2VA · 全参考（多参考图）", "Ref2VA · Full Reference")).tag("ref2va")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        Text(L("切换变体后需重新点「加载到显存」生效；两种变体共用编码器，仅 DiT 主干不同。",
+                               "Reload after switching; both variants share the encoder and differ only in the DiT backbone."))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.bottom, 2)
+                }
+
                 HStack(spacing: 6) {
                     Button {
                         Task { await vm.startRemoteDownloadWeights() }
@@ -1252,6 +1384,16 @@ struct MainStudioView: View {
                         .help(L("将当前模型从 GPU 显存中卸载释放", "Unload active model from GPU VRAM"))
                         .disabled(vm.isUnloadingModel)
                     }
+
+                    Button {
+                        Task { await vm.hotRedeployServerCode() }
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath.circle")
+                    }
+                    .controlSize(.regular)
+                    .help(L("热更新服务端代码到当前实例（不重新申请实例，但会清空显存）",
+                            "Hot-redeploy server code to the running instance (keeps the instance, clears VRAM)"))
+                    .disabled(!vm.isConnected || vm.isWakingColab || vm.isLoadingModel || vm.isDownloadingWeights)
 
                     Button {
                         Task { await vm.previewOrphanWeights() }

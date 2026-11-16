@@ -523,6 +523,142 @@ struct FrameDropWell: View {
 }
 
 
+// MARK: - Ref2VA 多参考图上传网格
+
+/// 最多 9 张参考图；顺序即提示词里的 <Picture 1>…<Picture N>。
+/// 支持点击多选、拖入多张文件。
+struct MultiRefDropGrid: View {
+    @Binding var images: [NSImage]
+    var maxCount: Int = 9
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isTargeted: Bool = false
+
+    private let columns = [GridItem(.adaptive(minimum: 92), spacing: 10)]
+
+    var body: some View {
+        let palette = StudioPalette(colorScheme: colorScheme)
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(Array(images.enumerated()), id: \.offset) { idx, img in
+                    ZStack(alignment: .topLeading) {
+                        Image(nsImage: img)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 92, height: 92)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Text("<Picture \(idx + 1)>")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.55))
+                            .foregroundStyle(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .padding(4)
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Button {
+                                    if idx > 0 { images.swapAt(idx, idx - 1) }
+                                } label: {
+                                    Image(systemName: "chevron.left.circle.fill")
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(.white, .black.opacity(0.5))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(idx == 0)
+                                Spacer()
+                                Button {
+                                    images.remove(at: idx)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(.white, .black.opacity(0.5))
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
+                                Button {
+                                    if idx < images.count - 1 { images.swapAt(idx, idx + 1) }
+                                } label: {
+                                    Image(systemName: "chevron.right.circle.fill")
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(.white, .black.opacity(0.5))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(idx == images.count - 1)
+                            }
+                        }
+                        .padding(4)
+                    }
+                    .frame(width: 92, height: 92)
+                }
+
+                if images.count < maxCount {
+                    Button {
+                        pickImages()
+                    } label: {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(palette.inputFill)
+                            .frame(width: 92, height: 92)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(
+                                        isTargeted ? Color.accentColor : palette.cardBorder,
+                                        style: StrokeStyle(lineWidth: isTargeted ? 2 : 1.2, dash: [5])
+                                    )
+                            )
+                            .overlay(
+                                VStack(spacing: 4) {
+                                    Image(systemName: "photo.badge.plus")
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundStyle(Color.accentColor)
+                                    Text("\(images.count)/\(maxCount)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text(L("顺序即 <Picture 1>…<Picture N>，可用左右箭头调序；支持点击多选或一次拖入多张。",
+                   "Order maps to <Picture 1>…<Picture N>; reorder with arrows. Multi-select or drop several files at once."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .onDrop(of: [.fileURL, .image], isTargeted: $isTargeted) { providers in
+            handleDrop(providers: providers)
+        }
+    }
+
+    private func pickImages() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                guard images.count < maxCount else { break }
+                if let loaded = NSImage(contentsOf: url) { images.append(loaded) }
+            }
+        }
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        for provider in providers {
+            guard images.count < maxCount else { break }
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url = url, let loaded = NSImage(contentsOf: url) else { return }
+                    DispatchQueue.main.async {
+                        if self.images.count < self.maxCount { self.images.append(loaded) }
+                    }
+                }
+            }
+        }
+        return true
+    }
+}
+
 // MARK: - 通用 UI 容器组件
 
 struct SidebarCard<Content: View>: View {

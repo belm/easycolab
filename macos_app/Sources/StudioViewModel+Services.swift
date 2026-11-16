@@ -317,6 +317,106 @@ extension StudioViewModel {
         }
     }
 
+    /// 启动时自动恢复：探活上次的 Colab 地址，连上则直接恢复（不重新申请实例、不重复加载模型）。
+    /// 注意：这里不走 checkColabStatus，避免其失败分支误触发 resetStaleRemoteRuntimeState 清空状态。
+    func restoreLastSessionIfAvailable() async {
+        let saved = Self.normalizeServerURL(
+            UserDefaults.standard.string(forKey: "colabServerURL") ?? ""
+        )
+        guard !saved.isEmpty else { return }
+        if isConnected { return }
+
+        // 设置地址会自动带出该地址保存过的管理密码
+        if colabServerURL != saved { colabServerURL = saved }
+
+        statusMessage = L("正在恢复上次的 Colab 连接…", "Restoring last Colab connection…")
+
+        // 最多 6 次、间隔 2.5 秒（隧道冷启动、代理抖动都能覆盖）
+        for attempt in 1...6 {
+            if await probeServerReachable() {
+                // 探活成功后再走一次正式状态同步，把显存/权重/模型状态全部读回来
+                await checkColabStatus(silent: true)
+                if isConnected {
+                    statusMessage = L(
+                        "✅ 已恢复之前的 Colab 会话（\(gpuName)），\(activeModelSpec.name) 仍在显存，可直接生成。",
+                        "✅ Restored previous Colab session (\(gpuName)); \(activeModelSpec.name) is still in VRAM, ready to generate."
+                    )
+                    await fetchR2Config()
+                    return
+                }
+            }
+            if attempt < 6 {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+            }
+        }
+
+        isConnected = false
+        statusMessage = L(
+            "未能恢复上次的 Colab 会话（实例可能已休眠/回收，或隧道地址已失效）。可点「重连」再试，或重新「唤醒实例并部署」。",
+            "Could not restore the previous Colab session (runtime may be asleep/reclaimed, or the tunnel URL expired). Click Reconnect, or Wake & Deploy again."
+        )
+    }
+
+    /// 轻量探活：只请求一次 status，成功即返回 true，不修改任何本地状态。
+    private func probeServerReachable() async -> Bool {
+        let base = normalizedBaseURL
+        guard !base.isEmpty,
+              let url = URL(string: "\(base)/minimax_api/status?model_id=\(selectedModelId)") else {
+            return false
+        }
+        do {
+            var req = try adminRequest(url)
+            req.timeoutInterval = 20
+            let (data, resp) = try await adminSession.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (obj["ok"] as? Bool) == true else { return false }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 热更新服务端代码：向当前运行中的实例重传 app.py 并重启服务。
+    /// 不重新申请实例、不重新下载权重；但会清空显存，需要重新「加载到显存」。
+    func hotRedeployServerCode() async {
+        guard !isWakingColab else { return }
+        if colabServerURL.isEmpty {
+            statusMessage = L("请先连接一个 Colab 实例。", "Connect to a Colab instance first.")
+            return
+        }
+        isWakingColab = true
+        statusMessage = L("正在向云端热更新服务端代码（不释放实例）…", "Hot-redeploying server code to the running instance…")
+
+        let out = await runBridgeCommand(["redeploy", "--app-py", appPyPath], installIfMissing: true)
+        isWakingColab = false
+
+        var newURL: String? = nil
+        var errLine: String? = nil
+        for line in out.split(separator: "\n") {
+            let s = String(line)
+            if s.hasPrefix("WAKE_URL:") {
+                newURL = String(s.dropFirst("WAKE_URL:".count))
+            } else if s.hasPrefix("WAKE_ERROR:") {
+                errLine = String(s.dropFirst("WAKE_ERROR:".count))
+            }
+        }
+
+        if let u = newURL {
+            colabServerURL = u
+            await checkColabStatus(silent: false)
+            statusMessage = L(
+                "✅ 服务端代码已热更新，新地址：\(u)\n显存已清空，请重新点「加载到显存」。",
+                "✅ Server code hot-redeployed. New URL: \(u)\nVRAM was cleared; click 'Load to VRAM' again."
+            )
+        } else {
+            statusMessage = L(
+                "❌ 热更新失败：\(errLine ?? "未获取到新地址")",
+                "❌ Hot redeploy failed: \(errLine ?? "no URL returned")"
+            )
+        }
+    }
+
     func keepaliveColabRuntime() async {
         guard cliLoggedIn, !isWakingColab else { return }
         let out = await runBridgeCommand(["keepalive"])
@@ -429,7 +529,12 @@ extension StudioViewModel {
     }
 
     func applyStatusResponse(_ decoded: ColabStatusResponse) {
+        let wasConnected = isConnected
         isConnected = true
+        // 首次连上时拉取一次 R2 配置（不阻塞状态刷新）
+        if !wasConnected {
+            Task { await self.fetchR2Config() }
+        }
         gpuName = decoded.gpu_name ?? "Colab GPU"
         vramFreeGB = decoded.vram_free_gb ?? 0.0
         vramTotalGB = decoded.vram_total_gb ?? 0.0

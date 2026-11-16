@@ -1132,6 +1132,17 @@ extension MainStudioView {
                     )
                 }
             }
+        case "ref2va":
+            WorkspaceCard(
+                title: L("全参考图（最多 9 张）", "Full Reference Images (up to 9)"),
+                subtitle: L(
+                    "上传人物 / 场景 / 道具参考图，顺序对应提示词里的 <Picture 1>…<Picture N>",
+                    "Upload character, scene, and prop references; order maps to <Picture 1>…<Picture N>"
+                ),
+                icon: "rectangle.on.rectangle.angled"
+            ) {
+                MultiRefDropGrid(images: $vm.referenceImages, maxCount: 9)
+            }
         case "i2v":
             WorkspaceCard(
                 title: L("起始首帧参考图", "Start Keyframe Image"),

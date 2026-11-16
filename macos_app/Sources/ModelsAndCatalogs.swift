@@ -99,7 +99,8 @@ struct OpenModelSpec: Identifiable, Hashable {
             defSteps = 35
             modes = [
                 TaskModeItem(id: "t2va", titleZh: "文生音视频", titleEn: "Text to Video+Audio", subtitleZh: "输入镜头与声音描述，同步生成视频与立体声音轨", subtitleEn: "Generate HD video and synchronized stereo audio from prompts", icon: "film"),
-                TaskModeItem(id: "fl2va", titleZh: "首尾帧生视频", titleEn: "First/Last Frame to Video", subtitleZh: "上传首帧或尾帧参考图，精准控制起止画面与运镜过渡", subtitleEn: "Upload start or end keyframes to lock composition and camera transitions", icon: "photo.on.rectangle.angled")
+                TaskModeItem(id: "fl2va", titleZh: "首尾帧生视频", titleEn: "First/Last Frame to Video", subtitleZh: "上传首帧或尾帧参考图，精准控制起止画面与运镜过渡", subtitleEn: "Upload start or end keyframes to lock composition and camera transitions", icon: "photo.on.rectangle.angled"),
+                TaskModeItem(id: "ref2va", titleZh: "全参考生视频", titleEn: "Reference to Video", subtitleZh: "上传最多 9 张参考图（人物/场景/道具），按 Subject 标签精准引用", subtitleEn: "Upload up to 9 reference images (characters, scenes, props) with Subject labels", icon: "rectangle.on.rectangle.angled")
             ]
         case .image:
             iconName = "sparkles.rectangle.stack"
@@ -157,11 +158,11 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
         nameZh: "MiniMax-H3 (33B)",
         nameEn: "MiniMax-H3 (33B)",
         repoId: "MiniMaxAI/MiniMax-H3",
-        badgeZh: "BF16 原生 · 134 GB",
-        badgeEn: "Native BF16 · 134 GB",
+        badgeZh: "BF16 原生 · 200 GB",
+        badgeEn: "Native BF16 · 200 GB",
         summaryZh: "全模态 BF16 原生满血精度同步生成高清视频与 32kHz 立体声音效、人声对白及配乐",
         summaryEn: "Full-modality native BF16 generation of HD video with synchronized 32kHz stereo SFX, dialogue & music",
-        approxSizeGB: 134.1,
+        approxSizeGB: 200.5,
         icon: "film.stack",
         modality: .videoAudio,
         defaultSteps: 35,
@@ -181,6 +182,14 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
                 subtitleZh: "上传首帧或尾帧参考图，精准控制起止画面与运镜过渡",
                 subtitleEn: "Upload start or end keyframes to lock composition and camera transitions",
                 icon: "photo.on.rectangle.angled"
+            ),
+            TaskModeItem(
+                id: "ref2va",
+                titleZh: "全参考生视频",
+                titleEn: "Reference to Video",
+                subtitleZh: "上传最多 9 张参考图（人物/场景/道具），按 Subject 标签精准引用",
+                subtitleEn: "Upload up to 9 reference images (characters, scenes, props), referenced via Subject labels",
+                icon: "rectangle.on.rectangle.angled"
             )
         ],
         defaultFiles: (1...13).map { i in
@@ -200,7 +209,14 @@ let OPEN_MODEL_CATALOG: [OpenModelSpec] = [
         } + [
             ModelFileItem(name: "FL2VA/video_vae/source/model.safetensors", desc: "3D 视频 VAE BF16 (9.7 GB)", exists: false, size_gb: 0),
             ModelFileItem(name: "FL2VA/audio_vae/model.safetensors", desc: "32kHz 立体声 VAE BF16 (0.6 GB)", exists: false, size_gb: 0)
-        ]
+        ] + (1...13).map { i in
+            ModelFileItem(
+                name: String(format: "Ref2VA/transformer/model-%05d-of-00013.safetensors", i),
+                desc: "Ref2VA 全参考主干 BF16 \(i)/13",
+                exists: false,
+                size_gb: 0
+            )
+        }
     ),
     OpenModelSpec(
         id: "minimax_h3_image",

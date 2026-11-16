@@ -302,6 +302,27 @@ class StudioViewModel: ObservableObject {
     @Published var musicPrompt: String = PRESET_TEMPLATES[0].music
     @Published var firstFrameImage: NSImage? = nil
     @Published var lastFrameImage: NSImage? = nil
+    /// Ref2VA 全参考模式：最多 9 张参考图，顺序对应提示词里的 <Picture 1>…<Picture N>
+    @Published var referenceImages: [NSImage] = []
+    /// MiniMax-H3 加载变体：fl2va（首尾帧/文生）或 ref2va（全参考）
+    @Published var h3Variant: String = "fl2va"
+
+    // MARK: - Cloudflare R2 临时中转
+    @Published var r2Enabled: Bool = false
+    @Published var r2AutoUpload: Bool = true
+    @Published var r2AccountId: String = ""
+    @Published var r2AccessKeyId: String = ""
+    @Published var r2SecretKey: String = ""
+    @Published var r2Bucket: String = ""
+    @Published var r2PublicBase: String = ""
+    @Published var r2Prefix: String = "easycolab"
+    @Published var r2HasAccessKey: Bool = false
+    @Published var r2HasSecret: Bool = false
+    @Published var r2Configured: Bool = false
+    @Published var r2Boto3Available: Bool = true
+    @Published var r2IsTesting: Bool = false
+    @Published var r2LastError: String? = nil
+    @Published var r2ShowConfig: Bool = false
     @Published var selectedVideoResolution: ResolutionOption = VIDEO_RESOLUTIONS[0]
     @Published var selectedImageResolution: ResolutionOption = IMAGE_RESOLUTIONS[0]
     @Published var numFrames: Double = 124
@@ -1085,6 +1106,121 @@ class StudioViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Cloudflare R2 配置与测试
+
+    func fetchR2Config() async {
+        let base = normalizedBaseURL
+        guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/r2/config") else { return }
+        do {
+            let (data, _) = try await adminSession.data(for: adminRequest(url))
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let cfg = obj["config"] as? [String: Any] else { return }
+            applyR2Config(cfg)
+        } catch {
+            // 静默失败：离线时不影响主流程
+        }
+    }
+
+    private func applyR2Config(_ cfg: [String: Any]) {
+        r2Enabled = (cfg["enabled"] as? Bool) ?? false
+        r2AutoUpload = (cfg["auto_upload"] as? Bool) ?? true
+        r2AccountId = (cfg["account_id"] as? String) ?? ""
+        r2Bucket = (cfg["bucket"] as? String) ?? ""
+        r2PublicBase = (cfg["public_base_url"] as? String) ?? ""
+        r2Prefix = (cfg["prefix"] as? String) ?? ""
+        r2HasAccessKey = (cfg["has_access_key"] as? Bool) ?? false
+        r2HasSecret = (cfg["has_secret"] as? Bool) ?? false
+        r2Configured = (cfg["configured"] as? Bool) ?? false
+        r2Boto3Available = (cfg["boto3_available"] as? Bool) ?? true
+        if let st = cfg["state"] as? [String: Any], let err = st["last_error"] as? String, !err.isEmpty {
+            r2LastError = err
+        } else {
+            r2LastError = nil
+        }
+    }
+
+    private func r2Payload(includeSecrets: Bool) -> [String: Any] {
+        var p: [String: Any] = [
+            "enabled": r2Enabled,
+            "auto_upload": r2AutoUpload,
+            "account_id": r2AccountId,
+            "bucket": r2Bucket,
+            "public_base_url": r2PublicBase,
+            "prefix": r2Prefix,
+        ]
+        if includeSecrets {
+            // 留空表示「不修改已保存的密钥」
+            if !r2AccessKeyId.isEmpty { p["access_key_id"] = r2AccessKeyId }
+            if !r2SecretKey.isEmpty { p["secret_access_key"] = r2SecretKey }
+        }
+        return p
+    }
+
+    func saveR2Config() async {
+        let base = normalizedBaseURL
+        guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/r2/config") else {
+            statusMessage = L("请先连接 Colab 服务端。", "Connect to the Colab server first.")
+            return
+        }
+        do {
+            var req = try adminRequest(url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: r2Payload(includeSecrets: true))
+            let (data, _) = try await adminSession.data(for: req)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            if let cfg = obj["config"] as? [String: Any] {
+                applyR2Config(cfg)
+                r2AccessKeyId = ""
+                r2SecretKey = ""
+            }
+            statusMessage = r2Configured
+                ? L("✅ R2 配置已保存并启用，生成完成后会自动上传。", "✅ R2 config saved and enabled; outputs will upload automatically.")
+                : L("⚠️ R2 配置已保存，但信息不完整，仍未启用。", "⚠️ R2 config saved but incomplete; not enabled yet.")
+        } catch {
+            statusMessage = L("R2 配置保存失败：\(error.localizedDescription)", "Failed to save R2 config: \(error.localizedDescription)")
+        }
+    }
+
+    func testR2Connection() async {
+        let base = normalizedBaseURL
+        guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/r2/test") else { return }
+        r2IsTesting = true
+        defer { r2IsTesting = false }
+        do {
+            var req = try adminRequest(url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // 用当前（可能未保存）的输入值测试
+            var payload = r2Payload(includeSecrets: true)
+            payload["enabled"] = true
+            req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (data, _) = try await adminSession.data(for: req)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            let installing = (obj["installing"] as? Bool) ?? false
+            if (obj["ok"] as? Bool) == true {
+                let reachable = (obj["public_reachable"] as? Bool) ?? false
+                if reachable {
+                    statusMessage = L("✅ R2 连接成功，公开地址可正常访问。", "✅ R2 connection OK; public URL is reachable.")
+                    r2LastError = nil
+                } else {
+                    let hint = (obj["hint"] as? String) ?? ""
+                    statusMessage = L("⚠️ R2 上传成功，但公开地址不可访问。\(hint)", "⚠️ Upload OK but public URL unreachable. \(hint)")
+                }
+            } else if installing {
+                let msg = (obj["error"] as? String) ?? ""
+                statusMessage = L("⏳ \(msg)", "⏳ \(msg)")
+                r2LastError = nil
+            } else {
+                let err = (obj["error"] as? String) ?? L("未知错误（服务端未返回原因）", "Unknown error (server returned no reason)")
+                statusMessage = L("❌ R2 连接失败：\(err)", "❌ R2 connection failed: \(err)")
+                r2LastError = err
+            }
+        } catch {
+            statusMessage = L("❌ R2 测试失败：\(error.localizedDescription)", "❌ R2 test error: \(error.localizedDescription)")
+        }
+    }
+
     func loadRemoteModelToVRAM() async {
         let base = normalizedBaseURL
         guard !base.isEmpty, let url = URL(string: "\(base)/minimax_api/load_model") else {
@@ -1127,7 +1263,9 @@ class StudioViewModel: ObservableObject {
                 "hf_token": hfToken,
                 "repo_id": activeModelSpec.isCustom ? activeModelSpec.repoId : "",
                 "include_pattern": activeModelSpec.isCustom ? activeModelSpec.includePattern : "",
-                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : ""
+                "custom_name": activeModelSpec.isCustom ? activeModelSpec.nameZh : "",
+                // MiniMax-H3 变体：fl2va（首尾帧/文生）或 ref2va（全参考）
+                "variant": (targetModel == "minimax_h3") ? h3Variant : "fl2va"
             ]
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -1271,6 +1409,22 @@ class StudioViewModel: ObservableObject {
             return
         }
 
+        if taskModeId == "ref2va" {
+            if referenceImages.isEmpty {
+                statusMessage = L(
+                    "在「全参考生视频」模式下，请至少添加 1 张参考图（最多 9 张）。",
+                    "Please add at least 1 reference image (up to 9) in Reference-to-Video mode."
+                )
+                return
+            }
+            if referenceImages.count > 9 {
+                statusMessage = L(
+                    "全参考模式最多支持 9 张参考图，当前有 \(referenceImages.count) 张。",
+                    "Reference-to-Video supports at most 9 images; currently \(referenceImages.count)."
+                )
+                return
+            }
+        }
         if taskModeId == "fl2va" && firstFrameImage == nil && lastFrameImage == nil {
             statusMessage = L(
                 "在「首尾帧生视频」模式下，请至少提供一张首帧或尾帧图片。",
@@ -1383,6 +1537,14 @@ class StudioViewModel: ObservableObject {
             ]
             if !chatPayload.isEmpty {
                 payload["chat_messages"] = chatPayload
+            }
+
+            if taskModeId == "ref2va" {
+                var refB64: [String] = []
+                for img in referenceImages.prefix(9) {
+                    if let b64 = encodeImageToBase64(img) { refB64.append(b64) }
+                }
+                if !refB64.isEmpty { payload["reference_images"] = refB64 }
             }
 
             let needsImage = ["fl2va", "i2v", "i2i_edit", "vlm"].contains(taskModeId)

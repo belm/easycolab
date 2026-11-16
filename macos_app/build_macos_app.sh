@@ -21,7 +21,7 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 # 内置服务端与桥接资源，支持将 EasyColab.app 独立拖入 /Applications 开箱即用
-for res_file in "VERSION" "app.py" "runtime_auth.py" "colab_bridge.py" "EasyColab_Server.ipynb" "requirements.txt"; do
+for res_file in "VERSION" "app.py" "runtime_auth.py" "colab_bridge.py" "r2_upload.py" "EasyColab_Server.ipynb" "requirements.txt"; do
     if [ -f "${PROJECT_ROOT}/${res_file}" ]; then
         cp -f "${PROJECT_ROOT}/${res_file}" "${RESOURCES_DIR}/${res_file}"
     fi
@@ -166,18 +166,45 @@ else
     echo "✅ Built arm64 Binary (minos 13.0)"
 fi
 
-# 4. 本地签名并打包 EasyColab-macOS.zip 发行压缩包
+# 4. 本地签名并打包 DMG 发行镜像（只出 dmg，不再产出 zip）
 xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
 codesign --force --deep --sign - "${BUNDLE_DIR}"
 touch "${BUNDLE_DIR}"
 
 if [ "${BUILD_ARCH}" = "arm64" ]; then
-    ZIP_PATH="${PROJECT_ROOT}/EasyColab-macOS-arm64.zip"
+    DMG_PATH="${PROJECT_ROOT}/EasyColab-macOS-arm64.dmg"
 else
-    ZIP_PATH="${PROJECT_ROOT}/EasyColab-macOS.zip"
+    DMG_PATH="${PROJECT_ROOT}/EasyColab-macOS.dmg"
 fi
-rm -f "${ZIP_PATH}"
-ditto -c -k --sequesterRsrc --keepParent "${BUNDLE_DIR}" "${ZIP_PATH}"
+rm -f "${DMG_PATH}"
+echo "正在生成 DMG 发行镜像：${DMG_PATH}"
+hdiutil create \
+    -volname "${APP_NAME}" \
+    -srcfolder "${BUNDLE_DIR}" \
+    -ov -format UDZO \
+    "${DMG_PATH}"
+
+# 校验 DMG：能挂载、内含 app 与新版 app.py
+DMG_MOUNT="$(mktemp -d /tmp/easycolab_dmg.XXXXXX)"
+if hdiutil attach "${DMG_PATH}" -mountpoint "${DMG_MOUNT}" -nobrowse -quiet; then
+    if [ ! -d "${DMG_MOUNT}/${APP_NAME}.app" ]; then
+        echo "❌ DMG 校验失败：未找到 ${APP_NAME}.app"
+        hdiutil detach "${DMG_MOUNT}" -quiet || true
+        rm -rf "${DMG_MOUNT}"
+        exit 1
+    fi
+    if [ ! -f "${DMG_MOUNT}/${APP_NAME}.app/Contents/Resources/app.py" ]; then
+        echo "❌ DMG 校验失败：内置 app.py 缺失"
+        hdiutil detach "${DMG_MOUNT}" -quiet || true
+        rm -rf "${DMG_MOUNT}"
+        exit 1
+    fi
+    echo "✅ DMG 校验通过（app.py $(wc -c < "${DMG_MOUNT}/${APP_NAME}.app/Contents/Resources/app.py" | tr -d " ") 字节）"
+    hdiutil detach "${DMG_MOUNT}" -quiet || true
+else
+    echo "⚠️ DMG 挂载校验跳过（attach 失败）"
+fi
+rm -rf "${DMG_MOUNT}"
 
 echo "✅ Successfully built: ${BUNDLE_DIR}"
-echo "✅ Successfully packaged: ${ZIP_PATH}"
+echo "✅ Successfully packaged: ${DMG_PATH}"

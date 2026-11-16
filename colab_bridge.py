@@ -545,6 +545,14 @@ def cmd_wake(gpu_type: str, app_py_path: str):
                 time.sleep(2.5)
 
         contents.upload(os.path.join(os.path.dirname(app_py_path), "runtime_auth.py"), "content/runtime_auth.py")
+
+        # 可选模块：Cloudflare R2 临时中转上传（缺失时 app.py 会降级运行）
+        _r2_mod = os.path.join(os.path.dirname(app_py_path), "r2_upload.py")
+        if os.path.exists(_r2_mod):
+            try:
+                contents.upload(_r2_mod, "content/r2_upload.py")
+            except Exception as _e:
+                print(f"WAKE_LOG: ⚠️ r2_upload.py 上传失败（R2 功能不可用）: {_e}", flush=True)
         rclone_conf_text = _build_rclone_drive_conf()
         if rclone_conf_text:
             tmp_rc_fd, tmp_rc_path = tempfile.mkstemp(prefix="easycolab_rc_", suffix=".conf")
@@ -608,11 +616,12 @@ if os.path.exists(os.path.expanduser("~/.config/rclone/rclone.conf")):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            for _ in range(10):
+            # rclone 首次挂载通常需要 10~40 秒，最多等 60 秒
+            for _ in range(60):
                 if os.path.ismount("/content/drive/MyDrive"):
                     print("✅ 已通过 Google OAuth 自动挂载 Google Drive (/content/drive/MyDrive)！", flush=True)
                     break
-                time.sleep(0.5)
+                time.sleep(1)
             else:
                 # 容器未开放 FUSE 挂载权限时清理空目录，由 app.py 自动启用 rclone 云盘高速双向同步
                 try:
@@ -625,7 +634,7 @@ if os.path.exists(os.path.expanduser("~/.config/rclone/rclone.conf")):
 if not os.path.exists("/content/DiffSynth-Studio"):
     print("正在克隆 DiffSynth-Studio...", flush=True)
     subprocess.run(["git", "clone", "--depth", "1", "https://github.com/modelscope/DiffSynth-Studio.git", "/content/DiffSynth-Studio"], check=True)
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "transformers", "accelerate", "bitsandbytes", "huggingface_hub", "hf_transfer", "qwen-vl-utils", "einops", "kernels>=0.17.2,<0.18.0", "git+https://github.com/huggingface/diffusers.git", "av", "gradio", "modelscope", "imageio", "imageio-ffmpeg", "scipy", "soundfile", "librosa"], check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "transformers", "accelerate", "bitsandbytes", "huggingface_hub", "hf_transfer", "qwen-vl-utils", "einops", "kernels>=0.17.2,<0.18.0", "git+https://github.com/huggingface/diffusers.git", "av", "gradio", "modelscope", "imageio", "imageio-ffmpeg", "scipy", "soundfile", "librosa", "boto3"], check=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "fla-core", "flash-linear-attention"], check=False)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-deps", "--only-binary=:all:", "causal-conv1d"], check=False)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "/content/DiffSynth-Studio"], check=True)
@@ -718,6 +727,206 @@ else:
             target_session.kernel_id = None
             target_session.session_id = None
             outputs = _run_boot_on_runtime(use_saved_kernel=False)
+
+        for out in outputs:
+            if "text" in out:
+                for line in out["text"].splitlines():
+                    print(line, flush=True)
+            elif out.get("output_type") == "error":
+                print("WAKE_ERROR: " + out.get("evalue", "Execution error"), flush=True)
+
+    except Exception as e:
+        print(f"WAKE_ERROR: {str(e)}", flush=True)
+
+
+REDEPLOY_BOOT_CODE = r"""
+import os, sys, time, re, shutil, subprocess
+
+with open(ADMIN_STAGE, encoding="ascii") as stream:
+    admin_password = stream.read()
+os.unlink(ADMIN_STAGE)
+
+# 复用当前实例：不重新安装依赖；但需要确保 Google Drive 仍然挂载
+# （热更新会重启内核/kernel，rclone mount 属于该会话的子进程，可能已随内核结束而消失）
+def _ensure_drive_mount():
+    import os, shutil, subprocess, time
+    gdrive = "/content/drive/MyDrive"
+    try:
+        if os.path.ismount(gdrive):
+            print("✅ Google Drive 已挂载，跳过", flush=True)
+            return True
+    except Exception:
+        pass
+    if not os.path.exists(os.path.expanduser("~/.config/rclone/rclone.conf")):
+        print("⚠️ 未找到 rclone 配置，跳过 Drive 挂载", flush=True)
+        return False
+    if not shutil.which("rclone"):
+        print("⚠️ 未找到 rclone 可执行文件，跳过 Drive 挂载", flush=True)
+        return False
+    subprocess.run(["rclone", "mkdir", "easycolab_gdrive:EasyColab_Drive"], check=False)
+    os.makedirs(gdrive, exist_ok=True)
+    # 清理可能残留的挂载点
+    if os.path.exists(os.path.join(gdrive, "EasyColab_Drive")) or not os.listdir(gdrive):
+        try:
+            subprocess.run(["fusermount3", "-u", gdrive], check=False, timeout=10)
+        except Exception:
+            try:
+                subprocess.run(["fusermount", "-u", gdrive], check=False, timeout=10)
+            except Exception:
+                pass
+    subprocess.Popen(
+        ["rclone", "mount", "easycolab_gdrive:EasyColab_Drive", gdrive,
+         "--vfs-cache-mode", "writes", "--vfs-write-back", "3s",
+         "--dir-cache-time", "15s", "--drive-chunk-size", "64M",
+         "--buffer-size", "32M", "--allow-non-empty"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    # rclone 冷启动首次挂载较慢，最多等 60 秒
+    for _ in range(30):
+        if os.path.ismount(gdrive):
+            print("✅ 热更新期间已重新挂载 Google Drive", flush=True)
+            return True
+        time.sleep(2)
+    print("⚠️ Drive 挂载超时（60s），将回退本地存储", flush=True)
+    return False
+
+_ensure_drive_mount()
+
+# 重启服务端进程
+subprocess.run(["pkill", "-f", "python.*/content/app.py"], check=False)
+time.sleep(2)
+
+log_path = "/content/easycolab_server.log"
+if os.path.exists(log_path):
+    os.remove(log_path)
+
+with open(log_path, "w") as out_f:
+    subprocess.Popen(
+        [sys.executable, "-u", "/content/app.py"],
+        cwd="/content",
+        env={**os.environ, "EASYCOLAB_ADMIN_PASSWORD": admin_password},
+        stdout=out_f, stderr=subprocess.STDOUT,
+    )
+
+url_re = re.compile(r"^EasyColab URL: (https://[a-zA-Z0-9-]+\.gradio\.live)$", re.MULTILINE)
+found_url = None
+for _ in range(90):
+    time.sleep(2)
+    if os.path.exists(log_path):
+        txt = open(log_path, "r", errors="replace").read()
+        m = url_re.search(txt)
+        if m:
+            found_url = m.group(1)
+            break
+
+if found_url:
+    print("WAKE_URL:" + found_url, flush=True)
+else:
+    tail = open(log_path, "r", errors="replace").read()[-800:] if os.path.exists(log_path) else "no log"
+    print("WAKE_ERROR: 热更新启动超时，日志尾部: " + tail, flush=True)
+"""
+
+
+def cmd_redeploy(app_py_path: str):
+    """热更新服务端代码：向【当前运行中】的 Colab 实例重传 app.py 并重启服务。
+
+    不释放实例、不重新下载权重（若权重在 Drive/本地盘则保留）。
+    注意：重启会清空 GPU 显存里的模型，需要重新“加载到显存”。
+    """
+    if not _has_valid_token():
+        print("WAKE_ERROR: 尚未授权登录 Google 账号，请先点击「🔑 绑定账号」", flush=True)
+        return
+
+    import getpass
+    password = os.environ.pop("EASYCOLAB_ADMIN_PASSWORD", "")
+    if not password and sys.stdin.isatty():
+        password = getpass.getpass("Management password: ")
+    if not password:
+        print("WAKE_ERROR: 缺少管理密码", flush=True)
+        return
+
+    try:
+        print("REDEPLOY_LOG: 🔍 查找当前运行中的实例...", flush=True)
+        local_sessions, assignments = _safe_sync_sessions()
+        target_session = (
+            local_sessions.get("easycolab")
+            or local_sessions.get("aevix")
+            or local_sessions.get("minimax")
+        )
+        if not target_session and local_sessions:
+            target_session = list(local_sessions.values())[0]
+        if not target_session:
+            print("WAKE_ERROR: 没有找到运行中的实例。请先用「唤醒实例并部署」。", flush=True)
+            return
+
+        print(f"REDEPLOY_LOG: ♻️ 复用实例 [{target_session.name}] ({target_session.accelerator})", flush=True)
+        if not _wait_for_runtime_ready(target_session, timeout_s=30):
+            print("WAKE_ERROR: 实例已失效，无法热更新。请点击「唤醒实例并部署」重新分配。", flush=True)
+            return
+
+        contents = ContentsClient(target_session)
+        print("REDEPLOY_LOG: 正在上传最新服务端代码 (app.py)...", flush=True)
+        for up_attempt in range(4):
+            try:
+                contents.upload(app_py_path, "content/app.py")
+                break
+            except Exception as up_err:
+                if up_attempt == 3:
+                    raise up_err
+                time.sleep(2.5)
+
+        # 同步上传可选模块
+        for mod_name in ("runtime_auth.py", "r2_upload.py"):
+            mod_path = os.path.join(os.path.dirname(app_py_path), mod_name)
+            if os.path.exists(mod_path):
+                try:
+                    contents.upload(mod_path, "content/" + mod_name)
+                    print(f"REDEPLOY_LOG: 已同步 {mod_name}", flush=True)
+                except Exception as _e:
+                    print(f"REDEPLOY_LOG: ⚠️ {mod_name} 上传失败: {_e}", flush=True)
+
+        print("REDEPLOY_LOG: 正在重启服务端进程（约 30~90 秒）...", flush=True)
+
+        def _on_kid(kid):
+            target_session.kernel_id = kid
+            state.store.add(target_session)
+
+        def _on_sid(sid):
+            target_session.session_id = sid
+            state.store.add(target_session)
+
+        def _run(use_saved_kernel: bool):
+            rt = ColabRuntime(
+                target_session.url,
+                target_session.token,
+                session_name=target_session.name,
+                history=state.history,
+                kernel_id=target_session.kernel_id if use_saved_kernel else None,
+                session_id=target_session.session_id if use_saved_kernel else None,
+                on_kernel_started=_on_kid,
+                on_session_started=_on_sid,
+            )
+            try:
+                stage = ".easycolab-management-" + uuid.uuid4().hex
+                with tempfile.TemporaryDirectory() as directory:
+                    password_file = os.path.join(directory, "management")
+                    with open(password_file, "w", encoding="ascii") as stream:
+                        stream.write(password)
+                    contents.upload(password_file, "content/" + stage)
+                code = "ADMIN_STAGE = " + repr("/content/" + stage) + "\n" + REDEPLOY_BOOT_CODE
+                return rt.execute_code(code, allow_stdin=False, timeout=300)
+            finally:
+                try:
+                    rt.stop()
+                except Exception:
+                    pass
+
+        try:
+            outputs = _run(use_saved_kernel=True)
+        except Exception:
+            target_session.kernel_id = None
+            target_session.session_id = None
+            outputs = _run(use_saved_kernel=False)
 
         for out in outputs:
             if "text" in out:
@@ -862,6 +1071,13 @@ def main(argv=None):
         default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"),
     )
 
+    p_redeploy = sub.add_parser("redeploy")
+    p_redeploy.add_argument(
+        "--app-py",
+        type=str,
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"),
+    )
+
     sub.add_parser("keepalive")
     sub.add_parser("stop_all")
 
@@ -876,6 +1092,8 @@ def main(argv=None):
         cmd_auth_code(args.code)
     elif args.cmd == "wake":
         cmd_wake(args.gpu, args.app_py)
+    elif args.cmd == "redeploy":
+        cmd_redeploy(args.app_py)
     elif args.cmd == "keepalive":
         cmd_keepalive()
     elif args.cmd == "stop_all":
